@@ -1003,9 +1003,11 @@ if run_column:
     with st.spinner("Predicting full soil column 0–60 m..."):
         _ve = st.session_state._query_easting
         _vn = st.session_state._query_northing
-        vb_rows = predictor.predict_column(
-            _ve, _vn, list(range(0, 62, 2)), method,
-        )
+        vb_rows = []
+        for _d in range(0, 62, 2):
+            _r = predictor.predict(_ve, _vn, float(_d), method)
+            _r["depth_m"] = float(_d)
+            vb_rows.append(_r)
         # Build unique name; append suffix if coordinates already predicted
         _base = f"VBH-{int(_ve)}-{int(_vn)}"
         _existing = {v["name"] for v in st.session_state.virtual_boreholes}
