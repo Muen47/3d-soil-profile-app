@@ -224,7 +224,7 @@ def build_figure(
     df: pd.DataFrame,
     pred_point: tuple | None = None,
     pred_layer: str | None = None,
-    virtual_bh: dict | None = None,
+    virtual_bhs: list | None = None,
 ) -> go.Figure:
     fig = go.Figure()
 
@@ -268,11 +268,12 @@ def build_figure(
             ),
         ))
 
-    # Virtual borehole (cross markers + dashed stick)
-    if virtual_bh is not None:
-        ve   = virtual_bh["easting"]
-        vn   = virtual_bh["northing"]
-        rows = virtual_bh["rows"]
+    # Virtual boreholes (cross markers + dashed stick, one per entry)
+    for vbh in (virtual_bhs or []):
+        ve   = vbh["easting"]
+        vn   = vbh["northing"]
+        vname = vbh.get("name", f"VBH-{int(ve)}-{int(vn)}")
+        rows = vbh["rows"]
         all_depths = [r["depth_m"] for r in rows]
 
         fig.add_trace(go.Scatter3d(
@@ -280,7 +281,7 @@ def build_figure(
             z=[-d for d in all_depths],
             mode="lines",
             line=dict(color="#444444", width=3, dash="dash"),
-            name=f"Virtual BH  E:{ve:.0f} N:{vn:.0f}",
+            name=vname,
             showlegend=True, hoverinfo="skip",
         ))
 
@@ -295,7 +296,7 @@ def build_figure(
                 su_s  = f"{r['su_kpa']:.1f} kPa" if r.get("su_kpa")  is not None else "--"
                 spt_s = f"{r['spt_n']:.0f}"       if r.get("spt_n")   is not None else "--"
                 texts.append(
-                    f"<b>Virtual BH</b><br>Depth: {r['depth_m']:.0f} m<br>"
+                    f"<b>{vname}</b><br>Depth: {r['depth_m']:.0f} m<br>"
                     f"Layer: {layer}<br>su: {su_s}  SPT-N: {spt_s}<br>"
                     f"Confidence: {r.get('layer_confidence', 0)*100:.0f}%"
                 )
@@ -305,7 +306,7 @@ def build_figure(
                 mode="markers",
                 marker=dict(size=11, color=color, symbol="cross",
                             opacity=0.95, line=dict(color="white", width=0.8)),
-                name=f"Virtual · {layer}",
+                name=f"{vname} · {layer}",
                 text=texts, hovertemplate="%{text}<extra></extra>",
             ))
 
@@ -452,6 +453,7 @@ def build_planview_figure(
     selected: list[str],
     query_e: float,
     query_n: float,
+    virtual_bhs: list | None = None,
 ) -> go.Figure:
     selected_set = set(selected)
     order_map    = {bh: i + 1 for i, bh in enumerate(selected)}
@@ -523,6 +525,24 @@ def build_planview_figure(
         showlegend=False, name="_query",
     ))
 
+    # Virtual borehole star markers (appended after trace 3 — not in click-handler contract)
+    if virtual_bhs:
+        fig.add_trace(go.Scatter(
+            x=[v["easting"]  for v in virtual_bhs],
+            y=[v["northing"] for v in virtual_bhs],
+            mode="markers+text",
+            marker=dict(size=14, color="#43a047", symbol="star",
+                        line=dict(color="white", width=1.5), opacity=1.0),
+            text=[v.get("name", "") for v in virtual_bhs],
+            textposition="top center",
+            textfont=dict(size=8, color="#43a047"),
+            customdata=[v.get("name", "") for v in virtual_bhs],
+            hovertemplate="<b>%{customdata}</b><br>E: %{x:.0f}  N: %{y:.0f}<extra></extra>",
+            selected=dict(marker=dict(opacity=1.0)),
+            unselected=dict(marker=dict(opacity=1.0)),
+            showlegend=False, name="_vbh_markers",
+        ))
+
     # Order-number annotations on selected boreholes
     idx2 = bh_pos.set_index("borehole_id")
     for bh, order in order_map.items():
@@ -562,6 +582,7 @@ def build_mapbox_figure(
     center_lat: float | None = None,
     center_lon: float | None = None,
     zoom: int | None = None,
+    virtual_bhs: list | None = None,
 ) -> go.Figure:
     selected_set = set(selected)
 
@@ -632,6 +653,23 @@ def build_mapbox_figure(
         fig.add_trace(go.Scattermapbox(
             lat=[], lon=[], mode="lines",
             hoverinfo="skip", showlegend=False, name="_section_line",
+        ))
+
+    # Virtual borehole star markers
+    if virtual_bhs:
+        vbh_e_arr = np.array([v["easting"]  for v in virtual_bhs], dtype=float)
+        vbh_n_arr = np.array([v["northing"] for v in virtual_bhs], dtype=float)
+        vbh_lats, vbh_lons = _utm47n_to_latlon_arr(vbh_e_arr, vbh_n_arr)
+        vbh_names = [v.get("name", "") for v in virtual_bhs]
+        fig.add_trace(go.Scattermapbox(
+            lat=vbh_lats.tolist(), lon=vbh_lons.tolist(),
+            mode="markers+text",
+            marker=dict(size=14, color="#43a047", symbol="star", opacity=1.0),
+            text=vbh_names,
+            textposition="top right",
+            customdata=vbh_names,
+            hovertemplate="<b>%{customdata}</b><br>Lat: %{lat:.5f}  Lon: %{lon:.5f}<extra></extra>",
+            showlegend=False, name="_vbh_markers",
         ))
 
     # Trace 3: query point — red marker (circle is reliably supported on all mapbox versions)
@@ -850,7 +888,7 @@ _SS_DEFAULTS: dict = {
     "result":           None,
     "pred_coords":      None,
     "cs_ordered":       [],
-    "virtual_borehole": None,
+    "virtual_boreholes": [],
     "_plan_sel_id":     None,
     "_cs_sel_id":       None,
     "_map_style":       "Abstract",
@@ -903,6 +941,26 @@ with st.sidebar:
     run        = st.button("Run Prediction",           type="primary", use_container_width=True)
     run_column = st.button("Predict New Borehole Here", use_container_width=True)
 
+    # Virtual borehole list — shown only when at least one exists
+    if st.session_state.virtual_boreholes:
+        st.markdown(
+            "<p style='font-size:.82rem;font-weight:600;margin:8px 0 2px;'>"
+            "Virtual Boreholes:</p>",
+            unsafe_allow_html=True,
+        )
+        for _i, _vbh in enumerate(list(st.session_state.virtual_boreholes)):
+            _c_lbl, _c_btn = st.columns([5, 1])
+            with _c_lbl:
+                st.caption(f"★ {_vbh['name']}  [{_vbh['method']}]")
+            with _c_btn:
+                if st.button("✕", key=f"del_vbh_{_i}", help=f"Remove {_vbh['name']}"):
+                    st.session_state.virtual_boreholes.pop(_i)
+                    st.rerun()
+        if st.button("Clear All Virtual Boreholes", use_container_width=True,
+                     key="clr_all_vbh"):
+            st.session_state.virtual_boreholes = []
+            st.rerun()
+
     st.divider()
     st.caption(
         f"**Dataset** — {len(df)} samples — "
@@ -943,22 +1001,28 @@ if run:
 
 if run_column:
     with st.spinner("Predicting full soil column 0–60 m..."):
+        _ve = st.session_state._query_easting
+        _vn = st.session_state._query_northing
         vb_rows = predictor.predict_column(
-            st.session_state._query_easting,
-            st.session_state._query_northing,
-            list(range(0, 62, 2)),
-            method,
+            _ve, _vn, list(range(0, 62, 2)), method,
         )
-        st.session_state.virtual_borehole = {
-            "easting": st.session_state._query_easting,
-            "northing": st.session_state._query_northing,
-            "method": method_label,
-            "rows": vb_rows,
-        }
+        # Build unique name; append suffix if coordinates already predicted
+        _base = f"VBH-{int(_ve)}-{int(_vn)}"
+        _existing = {v["name"] for v in st.session_state.virtual_boreholes}
+        _name, _sfx = _base, 2
+        while _name in _existing:
+            _name = f"{_base}-{_sfx}"; _sfx += 1
+        st.session_state.virtual_boreholes.append({
+            "name":     _name,
+            "easting":  _ve,
+            "northing": _vn,
+            "method":   method_label,
+            "rows":     vb_rows,
+        })
 
 result      = st.session_state.result
 pred_coords = st.session_state.pred_coords
-vbh         = st.session_state.virtual_borehole
+vbhs        = st.session_state.virtual_boreholes
 
 
 # ── Header ────────────────────────────────────────────────────────────────────
@@ -983,31 +1047,26 @@ with tab1:
     with col_viewer:
         pred_layer = result["layer"] if result else None
         fig3d = build_figure(df, pred_point=pred_coords,
-                             pred_layer=pred_layer, virtual_bh=vbh)
+                             pred_layer=pred_layer, virtual_bhs=vbhs)
         st.plotly_chart(fig3d, use_container_width=True,
                         config={"displayModeBar": True, "scrollZoom": True})
 
-        # Virtual borehole table
-        if vbh is not None:
+        # Virtual borehole tables — one collapsible expander per VBH
+        for _vi, _vbh in enumerate(vbhs):
             with st.expander(
-                f"Virtual Borehole Profile — E {vbh['easting']:.0f}  "
-                f"N {vbh['northing']:.0f}  [{vbh['method']}]",
-                expanded=True,
+                f"{_vbh['name']}  [{_vbh['method']}]  "
+                f"E {_vbh['easting']:.0f}  N {_vbh['northing']:.0f}",
+                expanded=(_vi == len(vbhs) - 1),
             ):
-                _, c_clr = st.columns([6, 1])
-                with c_clr:
-                    if st.button("Clear", key="clr_vbh"):
-                        st.session_state.virtual_borehole = None
-                        st.rerun()
                 tbl = []
-                for r in vbh["rows"]:
+                for r in _vbh["rows"]:
                     tbl.append({
                         "Depth (m)":       r["depth_m"],
                         "Layer":           r.get("layer", ""),
                         "Conf.":           f"{r.get('layer_confidence', 0)*100:.0f}%",
-                        "su (kPa)":        f"{r['su_kpa']:.1f}"      if r.get("su_kpa")        is not None else "--",
-                        "SPT-N":           f"{r['spt_n']:.0f}"       if r.get("spt_n")         is not None else "--",
-                        "Unit Wt (kN/m³)": f"{r['unit_weight']:.2f}" if r.get("unit_weight")   is not None else "--",
+                        "su (kPa)":        f"{r['su_kpa']:.1f}"        if r.get("su_kpa")        is not None else "--",
+                        "SPT-N":           f"{r['spt_n']:.0f}"         if r.get("spt_n")         is not None else "--",
+                        "Unit Wt (kN/m³)": f"{r['unit_weight']:.2f}"   if r.get("unit_weight")   is not None else "--",
                         "PI (%)":          f"{r['plasticity_idx']:.1f}" if r.get("plasticity_idx") is not None else "--",
                     })
                 st.dataframe(pd.DataFrame(tbl), use_container_width=True, hide_index=True)
@@ -1134,6 +1193,7 @@ with tab3:
                 st.session_state.cs_ordered,
                 st.session_state._query_easting,
                 st.session_state._query_northing,
+                virtual_bhs=vbhs,
             )
             plan_event = st.plotly_chart(
                 plan_fig,
@@ -1155,6 +1215,7 @@ with tab3:
                 center_lat=st.session_state._map_center_lat,
                 center_lon=st.session_state._map_center_lon,
                 zoom=st.session_state._map_zoom,
+                virtual_bhs=vbhs,
             )
             mapbox_event = st.plotly_chart(
                 mapbox_fig,
