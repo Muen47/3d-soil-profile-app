@@ -192,7 +192,8 @@ _MAP_LATS, _MAP_LONS = _utm47n_to_latlon_arr(
 )
 _MAP_LAT_C = float(np.mean(_MAP_LATS))
 _MAP_LON_C = float(np.mean(_MAP_LONS))
-_MAP_SPAN  = max(float(_MAP_LATS.ptp()), float(_MAP_LONS.ptp()), 0.01)
+_MAP_SPAN  = max(float(_MAP_LATS.max()) - float(_MAP_LATS.min()),
+                 float(_MAP_LONS.max()) - float(_MAP_LONS.min()), 0.01)
 _MAP_ZOOM  = int(np.clip(np.log2(0.7 / _MAP_SPAN) + 12, 9, 15))
 
 
@@ -650,8 +651,8 @@ def build_mapbox_figure(
 
     # Zoom: use passed-in value or compute from borehole spread
     if zoom is None:
-        lat_span = float(lats_bh.max() - lats_bh.min())
-        lon_span = float(lons_bh.max() - lons_bh.min())
+        lat_span = float(lats_bh.max()) - float(lats_bh.min())
+        lon_span = float(lons_bh.max()) - float(lons_bh.min())
         span_deg = max(lat_span, lon_span, 0.01)
         zoom = int(np.clip(np.log2(0.7 / span_deg) + 12, 9, 15))
 
