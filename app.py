@@ -1150,14 +1150,6 @@ with tab3:
                 _plan_pts  = plan_event.selection.points
                 _is_mapbox = False
         else:
-            # "Fit All Boreholes" button — writes fit-all values to session state
-            if st.button("Fit All Boreholes", key="fit_all_btn",
-                         use_container_width=False):
-                st.session_state._map_center_lat = _MAP_LAT_C
-                st.session_state._map_center_lon = _MAP_LON_C
-                st.session_state._map_zoom       = _MAP_ZOOM
-                st.rerun()
-
             mapbox_fig = build_mapbox_figure(
                 st.session_state.cs_ordered,
                 st.session_state._query_easting,
