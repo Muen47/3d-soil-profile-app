@@ -660,6 +660,7 @@ def build_mapbox_figure(
         height=380, margin=dict(l=0, r=0, t=36, b=0),
         showlegend=False,
         clickmode="event+select",
+        dragmode="zoom",
         title=dict(
             text="Plan View — click anywhere to set coords; click borehole to add to section",
             x=0.5, font=dict(size=11),
@@ -1143,7 +1144,7 @@ with tab3:
                 use_container_width=True,
                 on_select="rerun",
                 selection_mode=["points"],
-                config={"displayModeBar": False},
+                config={"displayModeBar": False, "scrollZoom": True},
                 key="mapbox_view_chart",
             )
             if mapbox_event and mapbox_event.selection and mapbox_event.selection.points:
