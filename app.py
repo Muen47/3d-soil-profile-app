@@ -634,14 +634,11 @@ def build_mapbox_figure(
             hoverinfo="skip", showlegend=False, name="_section_line",
         ))
 
-    # Trace 3: query diamond
+    # Trace 3: query point — red marker (circle is reliably supported on all mapbox versions)
     fig.add_trace(go.Scattermapbox(
         lat=[query_lat], lon=[query_lon],
         mode="markers",
-        marker=dict(size=14, color="#ff6f00", symbol="diamond",
-                    opacity=1.0, allowoverlap=True),
-        selected=dict(marker=dict(size=14, color="#ff6f00", opacity=1.0)),
-        unselected=dict(marker=dict(size=14, color="#ff6f00", opacity=1.0)),
+        marker=dict(size=16, color="#e53935", symbol="circle", opacity=1.0),
         hovertemplate=(
             f"<b>Query Point</b><br>E: {query_e:.1f}  N: {query_n:.1f}<extra></extra>"
         ),
