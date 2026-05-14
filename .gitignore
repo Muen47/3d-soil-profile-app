@@ -1,0 +1,6 @@
+.streamlit/secrets.toml
+data/pdfs/
+.claude/
+models/
+__pycache__/
+*.pyc
