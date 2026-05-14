@@ -443,10 +443,33 @@ def build_planview_figure(df: pd.DataFrame, selected: list[str]) -> go.Figure:
     return fig
 
 
+def _borehole_interfaces(layer_dict: dict, layer_sequence: list[str]) -> list[float]:
+    """
+    Convert a per-borehole {layer: (top, bot)} dict into an ordered list of
+    n_layers+1 interface depths that are guaranteed to be contiguous (no gaps).
+
+    Missing layers get zero thickness — they are pinched at whatever depth
+    the stack has reached, so adjacent layers always share an exact boundary.
+    """
+    interfaces = []
+    current = 0.0
+    for layer in layer_sequence:
+        interfaces.append(current)           # top of this layer slot
+        if layer in layer_dict:
+            current = float(layer_dict[layer][1])   # advance to actual bottom
+        # if absent: current stays the same → zero thickness
+    interfaces.append(current)               # final bottom of column
+    return interfaces
+
+
 def build_crosssection_figure(df: pd.DataFrame, selected: list[str]) -> go.Figure:
     """
     Draw a 2D cross-section along the ordered list of borehole IDs.
     X-axis = cumulative distance along section (m), Y-axis = depth (positive down).
+
+    Every layer is drawn as a continuous polygon across ALL boreholes.
+    At boreholes where a layer is absent its thickness is forced to zero
+    (pinch-out), so there are no white gaps between bands.
     """
     bounds = get_layer_bounds(df)
     bh_pos = (
@@ -456,115 +479,107 @@ def build_crosssection_figure(df: pd.DataFrame, selected: list[str]) -> go.Figur
           .set_index("borehole_id")
     )
 
-    # Filter to boreholes present in both selection and bounds
     valid_sel = [b for b in selected if b in bh_pos.index]
     if len(valid_sel) < 2:
-        return go.Figure().add_annotation(
+        fig = go.Figure()
+        fig.add_annotation(
             text="Select at least 2 boreholes to draw a cross-section.",
             xref="paper", yref="paper", x=0.5, y=0.5,
             showarrow=False, font=dict(size=14, color="#888"),
         )
+        return fig
 
-    # Compute cumulative distances along section
+    # Cumulative horizontal distances along section
     cum_dist = [0.0]
     for i in range(1, len(valid_sel)):
         b0, b1 = valid_sel[i-1], valid_sel[i]
         de = bh_pos.loc[b1, "easting"]  - bh_pos.loc[b0, "easting"]
         dn = bh_pos.loc[b1, "northing"] - bh_pos.loc[b0, "northing"]
         cum_dist.append(cum_dist[-1] + np.sqrt(de**2 + dn**2))
-
     bh_x = {bh: cum_dist[i] for i, bh in enumerate(valid_sel)}
+
+    # Build {layer: (top, bot)} lookup per borehole
+    bh_layer = {}
+    for bh in valid_sel:
+        sub = bounds[bounds["borehole_id"] == bh]
+        bh_layer[bh] = {r["soil_layer"]: (r["top"], r["bot"]) for _, r in sub.iterrows()}
+
+    # Compute contiguous interface stacks for every borehole
+    # ifaces[bh][i] = top of LAYER_SEQUENCE[i]; ifaces[bh][-1] = column bottom
+    ifaces = {bh: _borehole_interfaces(bh_layer[bh], LAYER_SEQUENCE) for bh in valid_sel}
+
+    max_depth = max(v[-1] for v in ifaces.values())
+    max_depth = max(max_depth * 1.05, 10.0)
 
     fig = go.Figure()
 
-    # Determine max depth across selected boreholes
-    sel_bounds = bounds[bounds["borehole_id"].isin(valid_sel)]
-    max_depth = sel_bounds["bot"].max() if not sel_bounds.empty else 70.0
-    max_depth = max(max_depth * 1.05, 10.0)
+    xs = [bh_x[bh] for bh in valid_sel]
 
-    # Draw filled polygon bands per layer
-    for layer in LAYER_SEQUENCE:
-        color_hex = LAYER_COLORS.get(layer, "#aaaaaa")
-        fill_rgba = _hex_rgba(color_hex, 0.75)
-        line_rgba = _hex_rgba(color_hex, 1.0)
+    # One filled polygon per layer — spans ALL boreholes with no gaps
+    for li, layer in enumerate(LAYER_SEQUENCE):
+        tops = [ifaces[bh][li]     for bh in valid_sel]
+        bots = [ifaces[bh][li + 1] for bh in valid_sel]
 
-        top_vals = {}
-        bot_vals = {}
-        for bh in valid_sel:
-            row = bounds[(bounds["borehole_id"] == bh) & (bounds["soil_layer"] == layer)]
-            if not row.empty:
-                top_vals[bh] = float(row.iloc[0]["top"])
-                bot_vals[bh] = float(row.iloc[0]["bot"])
-
-        if len(top_vals) < 2:
+        # Skip layer if it has zero thickness everywhere (absent from all boreholes)
+        if all(abs(t - b) < 1e-6 for t, b in zip(tops, bots)):
             continue
 
-        # Build polygon: left→right along top, then right→left along bottom
-        xs_fwd = [bh_x[bh] for bh in valid_sel if bh in top_vals]
-        ys_top = [top_vals[bh] for bh in valid_sel if bh in top_vals]
-        xs_rev = list(reversed(xs_fwd))
-        ys_bot = list(reversed([bot_vals.get(bh, top_vals[bh]) for bh in valid_sel if bh in top_vals]))
+        color_hex = LAYER_COLORS.get(layer, "#aaaaaa")
+        fill_rgba = _hex_rgba(color_hex, 0.82)
+        line_rgba = _hex_rgba(color_hex, 1.0)
 
-        poly_x = xs_fwd + xs_rev + [xs_fwd[0]]
-        poly_y = ys_top + ys_bot + [ys_top[0]]
+        # Polygon: forward across tops, backward across bottoms, close
+        poly_x = xs + list(reversed(xs)) + [xs[0]]
+        poly_y = tops + list(reversed(bots)) + [tops[0]]
 
         fig.add_trace(go.Scatter(
             x=poly_x, y=poly_y,
             fill="toself",
             fillcolor=fill_rgba,
-            line=dict(color=line_rgba, width=1.5),
+            line=dict(color=line_rgba, width=1.2),
             mode="lines",
             name=f"{layer}  {LAYER_LABELS.get(layer, '')}",
             hovertemplate=f"<b>{layer}</b> — {LAYER_LABELS.get(layer,'')}<extra></extra>",
         ))
 
-        # Layer boundary lines (top only to avoid duplicate on shared boundary)
-        fig.add_trace(go.Scatter(
-            x=xs_fwd, y=ys_top,
-            mode="lines",
-            line=dict(color="#333333", width=1.2, dash="dot"),
-            showlegend=False,
-            hoverinfo="skip",
-        ))
-
-    # Borehole vertical lines + labels
+    # Borehole sticks + labels + depth ticks
     for bh in valid_sel:
-        bh_bounds = bounds[bounds["borehole_id"] == bh]
-        if bh_bounds.empty:
-            continue
         x_pos  = bh_x[bh]
-        max_bh = bh_bounds["bot"].max()
+        col_bot = ifaces[bh][-1]
         fig.add_shape(
             type="line",
-            x0=x_pos, x1=x_pos, y0=0, y1=max_bh,
-            line=dict(color="#333333", width=1.5, dash="solid"),
+            x0=x_pos, x1=x_pos, y0=0, y1=col_bot,
+            line=dict(color="#111111", width=1.8),
+            layer="above",
         )
         fig.add_annotation(
             x=x_pos, y=0,
             text=f"<b>{bh}</b>",
-            showarrow=False, yshift=12,
-            font=dict(size=10, color="#222"),
-            bgcolor="rgba(255,255,255,0.8)",
+            showarrow=False, yshift=14,
+            font=dict(size=10, color="#111"),
+            bgcolor="rgba(255,255,255,0.85)",
+            borderpad=2,
         )
-        # Depth ticks on borehole
-        for d_tick in np.arange(0, max_bh + 5, 10):
+        for d_tick in np.arange(10, col_bot + 1, 10):
             fig.add_annotation(
                 x=x_pos, y=d_tick,
-                text=f"{d_tick:.0f}m",
-                showarrow=False, xshift=6,
-                font=dict(size=8, color="#666"),
+                text=f"{int(d_tick)}m",
+                showarrow=False, xshift=7,
+                font=dict(size=7, color="#444"),
+                bgcolor="rgba(255,255,255,0)",
             )
 
-    # Distance labels between boreholes
+    # Horizontal distance labels between adjacent boreholes
     for i in range(1, len(valid_sel)):
-        b0, b1 = valid_sel[i-1], valid_sel[i]
-        mid_x  = (bh_x[b0] + bh_x[b1]) / 2
-        dist   = bh_x[b1] - bh_x[b0]
+        b0, b1  = valid_sel[i-1], valid_sel[i]
+        mid_x   = (bh_x[b0] + bh_x[b1]) / 2
+        dist    = bh_x[b1] - bh_x[b0]
         fig.add_annotation(
-            x=mid_x, y=-2.5,
+            x=mid_x, y=-3,
             text=f"{dist:.0f} m",
             showarrow=False,
-            font=dict(size=9, color="#555"),
+            font=dict(size=9, color="#444"),
+            bgcolor="rgba(255,255,255,0.7)",
         )
 
     fig.update_layout(
@@ -572,19 +587,20 @@ def build_crosssection_figure(df: pd.DataFrame, selected: list[str]) -> go.Figur
         margin=dict(l=60, r=20, t=50, b=40),
         xaxis=dict(
             title="Horizontal Distance (m)",
-            showgrid=True, gridcolor="#e0e0e0",
+            showgrid=True, gridcolor="#dde",
             zeroline=False,
+            range=[-cum_dist[-1] * 0.02, cum_dist[-1] * 1.04],
         ),
         yaxis=dict(
             title="Depth (m)",
             autorange="reversed",
-            showgrid=True, gridcolor="#e0e0e0",
-            range=[-5, max_depth],
+            showgrid=True, gridcolor="#dde",
+            range=[-6, max_depth],
             zeroline=True, zerolinecolor="#888", zerolinewidth=1.5,
         ),
         legend=dict(
             x=1.01, y=1,
-            bgcolor="rgba(255,255,255,0.9)",
+            bgcolor="rgba(255,255,255,0.92)",
             bordercolor="#ccc", borderwidth=1,
             font=dict(size=10),
             xanchor="left",
@@ -592,10 +608,7 @@ def build_crosssection_figure(df: pd.DataFrame, selected: list[str]) -> go.Figur
         paper_bgcolor="white",
         plot_bgcolor="#f9fafb",
         title=dict(
-            text=(
-                "Geological Cross-Section  —  "
-                + "  →  ".join(valid_sel)
-            ),
+            text="Geological Cross-Section  —  " + "  →  ".join(valid_sel),
             x=0.5, font=dict(size=13),
         ),
     )
