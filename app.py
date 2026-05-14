@@ -513,10 +513,10 @@ def build_planview_figure(
     # Trace 3: query-point diamond (orange, always shown)
     fig.add_trace(go.Scatter(
         x=[query_e], y=[query_n], mode="markers",
-        marker=dict(size=13, color="#ff6f00", symbol="diamond",
+        marker=dict(size=13, color="#43a047", symbol="diamond",
                     line=dict(color="white", width=2), opacity=1.0),
-        selected=dict(marker=dict(size=13, color="#ff6f00", opacity=1.0)),
-        unselected=dict(marker=dict(size=13, color="#ff6f00", opacity=1.0)),
+        selected=dict(marker=dict(size=13, color="#43a047", opacity=1.0)),
+        unselected=dict(marker=dict(size=13, color="#43a047", opacity=1.0)),
         hovertemplate=(
             f"<b>Query Point</b><br>E: {query_e:.1f}  N: {query_n:.1f}<extra></extra>"
         ),
@@ -638,7 +638,7 @@ def build_mapbox_figure(
     fig.add_trace(go.Scattermapbox(
         lat=[query_lat], lon=[query_lon],
         mode="markers",
-        marker=dict(size=16, color="#e53935", symbol="circle", opacity=1.0),
+        marker=dict(size=16, color="#43a047", symbol="circle", opacity=1.0),
         hovertemplate=(
             f"<b>Query Point</b><br>E: {query_e:.1f}  N: {query_n:.1f}<extra></extra>"
         ),
