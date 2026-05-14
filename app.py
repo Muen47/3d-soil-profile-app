@@ -1044,102 +1044,11 @@ tab1, tab2, tab3 = st.tabs([
 
 # ══ Tab 1 — 3D Borehole View ══════════════════════════════════════════════════
 with tab1:
-    col_viewer, col_results = st.columns([3, 2], gap="large")
-
-    with col_viewer:
-        pred_layer = result["layer"] if result else None
-        fig3d = build_figure(df, pred_point=pred_coords,
-                             pred_layer=pred_layer, virtual_bhs=vbhs)
-        st.plotly_chart(fig3d, use_container_width=True,
-                        config={"displayModeBar": True, "scrollZoom": True})
-
-        # Virtual borehole tables — one collapsible expander per VBH
-        for _vi, _vbh in enumerate(vbhs):
-            with st.expander(
-                f"{_vbh['name']}  [{_vbh['method']}]  "
-                f"E {_vbh['easting']:.0f}  N {_vbh['northing']:.0f}",
-                expanded=(_vi == len(vbhs) - 1),
-            ):
-                tbl = []
-                for r in _vbh["rows"]:
-                    tbl.append({
-                        "Depth (m)":       r["depth_m"],
-                        "Layer":           r.get("layer", ""),
-                        "Conf.":           f"{r.get('layer_confidence', 0)*100:.0f}%",
-                        "su (kPa)":        f"{r['su_kpa']:.1f}"        if r.get("su_kpa")        is not None else "--",
-                        "SPT-N":           f"{r['spt_n']:.0f}"         if r.get("spt_n")         is not None else "--",
-                        "Unit Wt (kN/m³)": f"{r['unit_weight']:.2f}"   if r.get("unit_weight")   is not None else "--",
-                        "PI (%)":          f"{r['plasticity_idx']:.1f}" if r.get("plasticity_idx") is not None else "--",
-                    })
-                st.dataframe(pd.DataFrame(tbl), use_container_width=True, hide_index=True)
-
-    with col_results:
-        st.markdown("#### Prediction Results")
-        if result is None:
-            st.info(
-                "Set coordinates in the sidebar, choose a method, "
-                "then click **Run Prediction**."
-            )
-            st.markdown("**Soil Layer Legend**")
-            for lyr, color in LAYER_COLORS.items():
-                st.markdown(
-                    f'<span style="display:inline-block;width:12px;height:12px;'
-                    f'background:{color};border-radius:2px;margin-right:6px;'
-                    f'vertical-align:middle;"></span>'
-                    f"**{lyr}** — {LAYER_LABELS.get(lyr, '')}",
-                    unsafe_allow_html=True,
-                )
-        else:
-            layer       = result["layer"]
-            conf        = result["layer_confidence"]
-            layer_color = LAYER_COLORS.get(layer, "#607d8b")
-            st.markdown(
-                f'<div style="background:{layer_color};color:#fff;'
-                f'padding:16px 20px;border-radius:8px;margin-bottom:6px;'
-                f'box-shadow:0 2px 8px rgba(0,0,0,.18);">'
-                f'<div style="font-size:.72rem;opacity:.85;font-weight:700;'
-                f'text-transform:uppercase;letter-spacing:.1em;">Predicted Soil Layer</div>'
-                f'<div style="font-size:2.1rem;font-weight:800;margin:4px 0 2px;">{layer}</div>'
-                f'<div style="font-size:.92rem;opacity:.9;">{LAYER_LABELS.get(layer, "")}</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-            _confidence_bar(conf)
-            st.markdown("**Predicted Properties**")
-            su,  su_std  = result.get("su_kpa"),        result.get("su_kpa_std")
-            spt, spt_std = result.get("spt_n"),         result.get("spt_n_std")
-            uw,  uw_std  = result.get("unit_weight"),   result.get("unit_weight_std")
-            pi,  pi_std  = result.get("plasticity_idx"),result.get("plasticity_idx_std")
-            _prop_card("Undrained Shear Strength su",
-                       f"{su:.1f}"  if su  is not None else "--", "kPa",
-                       f"{su_std:.1f} kPa" if su_std  is not None else None, "#1565C0")
-            _prop_card("SPT Blow Count N",
-                       f"{spt:.0f}" if spt is not None else "--", "blows / 300 mm",
-                       f"{spt_std:.1f}" if spt_std is not None else None, "#F9A825")
-            _prop_card("Unit Weight",
-                       f"{uw:.2f}"  if uw  is not None else "--", "kN/m³",
-                       f"{uw_std:.2f} kN/m³" if uw_std is not None else None, "#43a047")
-            _prop_card("Plasticity Index PI",
-                       f"{pi:.1f}"  if pi  is not None else "--", "%",
-                       f"{pi_std:.1f}%" if pi_std is not None else None, "#8e24aa")
-            st.caption(
-                f"Method: **{method_label}**  |  "
-                f"E {st.session_state._query_easting:.1f}  "
-                f"N {st.session_state._query_northing:.1f}  |  "
-                f"Depth {st.session_state._query_depth:.1f} m"
-            )
-
-    with st.expander("Borehole Dataset", expanded=False):
-        show_cols = [
-            "borehole_id", "depth_m", "depth_top_m", "depth_bot_m",
-            "soil_layer", "soil_desc", "consistency",
-            "su_kpa", "su_method", "spt_n",
-            "unit_weight", "plasticity_idx", "liquid_limit", "plastic_limit",
-        ]
-        st.dataframe(
-            df[[c for c in show_cols if c in df.columns]].reset_index(drop=True),
-            use_container_width=True, hide_index=True,
-        )
+    pred_layer = result["layer"] if result else None
+    fig3d = build_figure(df, pred_point=pred_coords,
+                         pred_layer=pred_layer, virtual_bhs=vbhs)
+    st.plotly_chart(fig3d, use_container_width=True,
+                    config={"displayModeBar": True, "scrollZoom": True})
 
 
 # ══ Tab 2 — 3D Solid Model ════════════════════════════════════════════════════
@@ -1388,3 +1297,99 @@ with tab3:
                 "Layer boundaries interpolated between boreholes — "
                 "click anywhere on the section to update the query coordinates and depth."
             )
+
+
+# ══ Permanent results panel (always visible below all tabs) ══════════════════
+st.divider()
+col_res, col_vbh = st.columns([2, 3], gap="large")
+
+with col_res:
+    st.markdown("#### Prediction Results")
+    if result is None:
+        st.info(
+            "Set coordinates in the sidebar, choose a method, "
+            "then click **Run Prediction**."
+        )
+        st.markdown("**Soil Layer Legend**")
+        for lyr, color in LAYER_COLORS.items():
+            st.markdown(
+                f'<span style="display:inline-block;width:12px;height:12px;'
+                f'background:{color};border-radius:2px;margin-right:6px;'
+                f'vertical-align:middle;"></span>'
+                f"**{lyr}** — {LAYER_LABELS.get(lyr, '')}",
+                unsafe_allow_html=True,
+            )
+    else:
+        layer       = result["layer"]
+        conf        = result["layer_confidence"]
+        layer_color = LAYER_COLORS.get(layer, "#607d8b")
+        st.markdown(
+            f'<div style="background:{layer_color};color:#fff;'
+            f'padding:16px 20px;border-radius:8px;margin-bottom:6px;'
+            f'box-shadow:0 2px 8px rgba(0,0,0,.18);">'
+            f'<div style="font-size:.72rem;opacity:.85;font-weight:700;'
+            f'text-transform:uppercase;letter-spacing:.1em;">Predicted Soil Layer</div>'
+            f'<div style="font-size:2.1rem;font-weight:800;margin:4px 0 2px;">{layer}</div>'
+            f'<div style="font-size:.92rem;opacity:.9;">{LAYER_LABELS.get(layer, "")}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        _confidence_bar(conf)
+        st.markdown("**Predicted Properties**")
+        su,  su_std  = result.get("su_kpa"),         result.get("su_kpa_std")
+        spt, spt_std = result.get("spt_n"),          result.get("spt_n_std")
+        uw,  uw_std  = result.get("unit_weight"),    result.get("unit_weight_std")
+        pi,  pi_std  = result.get("plasticity_idx"), result.get("plasticity_idx_std")
+        _prop_card("Undrained Shear Strength su",
+                   f"{su:.1f}"  if su  is not None else "--", "kPa",
+                   f"{su_std:.1f} kPa" if su_std  is not None else None, "#1565C0")
+        _prop_card("SPT Blow Count N",
+                   f"{spt:.0f}" if spt is not None else "--", "blows / 300 mm",
+                   f"{spt_std:.1f}" if spt_std is not None else None, "#F9A825")
+        _prop_card("Unit Weight",
+                   f"{uw:.2f}"  if uw  is not None else "--", "kN/m³",
+                   f"{uw_std:.2f} kN/m³" if uw_std is not None else None, "#43a047")
+        _prop_card("Plasticity Index PI",
+                   f"{pi:.1f}"  if pi  is not None else "--", "%",
+                   f"{pi_std:.1f}%" if pi_std is not None else None, "#8e24aa")
+        st.caption(
+            f"Method: **{method_label}**  |  "
+            f"E {st.session_state._query_easting:.1f}  "
+            f"N {st.session_state._query_northing:.1f}  |  "
+            f"Depth {st.session_state._query_depth:.1f} m"
+        )
+
+with col_vbh:
+    # Virtual borehole tables — one collapsible expander per VBH
+    if vbhs:
+        st.markdown("#### Virtual Borehole Profiles")
+        for _vi, _vbh in enumerate(vbhs):
+            with st.expander(
+                f"{_vbh['name']}  [{_vbh['method']}]  "
+                f"E {_vbh['easting']:.0f}  N {_vbh['northing']:.0f}",
+                expanded=(_vi == len(vbhs) - 1),
+            ):
+                tbl = []
+                for r in _vbh["rows"]:
+                    tbl.append({
+                        "Depth (m)":       r["depth_m"],
+                        "Layer":           r.get("layer", ""),
+                        "Conf.":           f"{r.get('layer_confidence', 0)*100:.0f}%",
+                        "su (kPa)":        f"{r['su_kpa']:.1f}"        if r.get("su_kpa")        is not None else "--",
+                        "SPT-N":           f"{r['spt_n']:.0f}"         if r.get("spt_n")         is not None else "--",
+                        "Unit Wt (kN/m³)": f"{r['unit_weight']:.2f}"   if r.get("unit_weight")   is not None else "--",
+                        "PI (%)":          f"{r['plasticity_idx']:.1f}" if r.get("plasticity_idx") is not None else "--",
+                    })
+                st.dataframe(pd.DataFrame(tbl), use_container_width=True, hide_index=True)
+
+with st.expander("Borehole Dataset", expanded=False):
+    show_cols = [
+        "borehole_id", "depth_m", "depth_top_m", "depth_bot_m",
+        "soil_layer", "soil_desc", "consistency",
+        "su_kpa", "su_method", "spt_n",
+        "unit_weight", "plasticity_idx", "liquid_limit", "plastic_limit",
+    ]
+    st.dataframe(
+        df[[c for c in show_cols if c in df.columns]].reset_index(drop=True),
+        use_container_width=True, hide_index=True,
+    )
