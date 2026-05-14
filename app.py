@@ -51,6 +51,80 @@ METHOD_MAP = {
     "XGBoost":                   "xgb",
 }
 
+# ── UTM Zone 47N ↔ WGS84 helpers ─────────────────────────────────────────────
+_WGS84_A    = 6_378_137.0
+_WGS84_F    = 1 / 298.257223563
+_WGS84_E2   = 2 * _WGS84_F - _WGS84_F ** 2
+_UTM47_LON0 = np.radians(99.0)
+_UTM_K0     = 0.9996
+_UTM_E0     = 500_000.0
+
+
+def _utm47n_to_latlon_arr(eastings, northings):
+    a, e2, k0 = _WGS84_A, _WGS84_E2, _UTM_K0
+    e1 = (1 - np.sqrt(1 - e2)) / (1 + np.sqrt(1 - e2))
+    x  = np.asarray(eastings,  dtype=float) - _UTM_E0
+    y  = np.asarray(northings, dtype=float)
+    M  = y / k0
+    mu = M / (a * (1 - e2/4 - 3*e2**2/64 - 5*e2**3/256))
+    phi1 = (mu
+            + (3*e1/2   - 27*e1**3/32)         * np.sin(2*mu)
+            + (21*e1**2/16 - 55*e1**4/32)       * np.sin(4*mu)
+            + (151*e1**3/96)                     * np.sin(6*mu)
+            + (1097*e1**4/512)                   * np.sin(8*mu))
+    sp = np.sin(phi1)
+    cp = np.cos(phi1)
+    tp = np.tan(phi1)
+    N1 = a / np.sqrt(1 - e2 * sp**2)
+    T1 = tp ** 2
+    C1 = e2 * cp**2 / (1 - e2)
+    R1 = a * (1 - e2) / (1 - e2 * sp**2) ** 1.5
+    D  = x / (N1 * k0)
+    lat = phi1 - (N1 * tp / R1) * (
+        D**2/2
+        - (5 + 3*T1 + 10*C1 - 4*C1**2 - 9*e2/(1-e2)) * D**4/24
+        + (61 + 90*T1 + 298*C1 + 45*T1**2 - 252*e2/(1-e2) - 3*C1**2) * D**6/720
+    )
+    lon = _UTM47_LON0 + (
+        D
+        - (1 + 2*T1 + C1)                                          * D**3/6
+        + (5 - 2*C1 + 28*T1 - 3*C1**2 + 8*e2/(1-e2) + 24*T1**2) * D**5/120
+    ) / cp
+    return np.degrees(lat), np.degrees(lon)
+
+
+def _utm47n_to_latlon(easting: float, northing: float) -> tuple[float, float]:
+    la, lo = _utm47n_to_latlon_arr(np.array([easting]), np.array([northing]))
+    return float(la[0]), float(lo[0])
+
+
+def _latlon_to_utm47n(lat_deg: float, lon_deg: float) -> tuple[float, float]:
+    a, e2, k0 = _WGS84_A, _WGS84_E2, _UTM_K0
+    lat = np.radians(lat_deg)
+    lon = np.radians(lon_deg)
+    sl, cl, tl = np.sin(lat), np.cos(lat), np.tan(lat)
+    N = a / np.sqrt(1 - e2 * sl**2)
+    T = tl ** 2
+    C = e2 * cl**2 / (1 - e2)
+    A = cl * (lon - _UTM47_LON0)
+    M = a * (
+        (1 - e2/4 - 3*e2**2/64   - 5*e2**3/256)   * lat
+        - (3*e2/8 + 3*e2**2/32   + 45*e2**3/1024)  * np.sin(2*lat)
+        + (15*e2**2/256           + 45*e2**3/1024)  * np.sin(4*lat)
+        - (35*e2**3/3072)                            * np.sin(6*lat)
+    )
+    east = _UTM_E0 + k0 * N * (
+        A
+        + (1 - T + C)                                  * A**3/6
+        + (5 - 18*T + T**2 + 72*C - 58*e2/(1-e2))    * A**5/120
+    )
+    north = k0 * (M + N * tl * (
+        A**2/2
+        + (5 - T + 9*C + 4*C**2)                      * A**4/24
+        + (61 - 58*T + T**2 + 600*C - 330*e2/(1-e2)) * A**6/720
+    ))
+    return float(east), float(north)
+
 # ── Password protection ───────────────────────────────────────────────────────
 def _render_login() -> None:
     try:
@@ -466,6 +540,134 @@ def build_planview_figure(
     return fig
 
 
+# ── View 3: Mapbox Plan View (Street Map / Satellite) ────────────────────────
+# Same trace-index contract as build_planview_figure:
+#   0 → ghost grid    1 → boreholes    2 → section line    3 → query diamond
+
+def build_mapbox_figure(
+    selected: list[str],
+    query_e: float,
+    query_n: float,
+    satellite: bool = False,
+) -> go.Figure:
+    selected_set = set(selected)
+
+    lats_bh, lons_bh = _utm47n_to_latlon_arr(
+        bh_pos["easting"].values, bh_pos["northing"].values
+    )
+    query_lat, query_lon = _utm47n_to_latlon(query_e, query_n)
+
+    lat_c = float(np.mean(lats_bh))
+    lon_c = float(np.mean(lons_bh))
+
+    # Ghost grid in lat/lon — captures clicks anywhere on the map
+    lat_lo = float(lats_bh.min()) - 0.06
+    lat_hi = float(lats_bh.max()) + 0.06
+    lon_lo = float(lons_bh.min()) - 0.06
+    lon_hi = float(lons_bh.max()) + 0.06
+    GLAT, GLON = np.meshgrid(
+        np.linspace(lat_lo, lat_hi, 25),
+        np.linspace(lon_lo, lon_hi, 25),
+    )
+
+    fig = go.Figure()
+
+    # Trace 0: ghost grid
+    fig.add_trace(go.Scattermapbox(
+        lat=GLAT.ravel().tolist(), lon=GLON.ravel().tolist(),
+        mode="markers",
+        marker=dict(size=14, color="rgba(0,0,0,0)", opacity=0),
+        selected=dict(marker=dict(opacity=0)),
+        unselected=dict(marker=dict(opacity=0)),
+        hoverinfo="skip", showlegend=False, name="_ghost",
+    ))
+
+    # Trace 1: boreholes
+    colors = ["#e53935" if b in selected_set else "#1E88E5"
+              for b in bh_pos["borehole_id"]]
+    sizes  = [14 if b in selected_set else 10 for b in bh_pos["borehole_id"]]
+    fig.add_trace(go.Scattermapbox(
+        lat=lats_bh.tolist(), lon=lons_bh.tolist(),
+        mode="markers+text",
+        marker=dict(size=sizes, color=colors, opacity=1.0),
+        text=bh_pos["borehole_id"].tolist(),
+        textposition="top right",
+        customdata=bh_pos["borehole_id"].tolist(),
+        hovertemplate=(
+            "<b>%{customdata}</b><br>Lat: %{lat:.5f}  Lon: %{lon:.5f}"
+            "<br><i>Click: set coords + add to section</i><extra></extra>"
+        ),
+        showlegend=False, name="_boreholes",
+    ))
+
+    # Trace 2: section path
+    if len(selected) >= 2:
+        idx = bh_pos.set_index("borehole_id")
+        sl, sl_lon = [], []
+        for b in selected:
+            if b in idx.index:
+                la, lo = _utm47n_to_latlon(
+                    float(idx.loc[b, "easting"]), float(idx.loc[b, "northing"])
+                )
+                sl.append(la); sl_lon.append(lo)
+        fig.add_trace(go.Scattermapbox(
+            lat=sl, lon=sl_lon, mode="lines",
+            line=dict(color="#e53935", width=2),
+            hoverinfo="skip", showlegend=False, name="_section_line",
+        ))
+    else:
+        fig.add_trace(go.Scattermapbox(
+            lat=[], lon=[], mode="lines",
+            hoverinfo="skip", showlegend=False, name="_section_line",
+        ))
+
+    # Trace 3: query diamond
+    fig.add_trace(go.Scattermapbox(
+        lat=[query_lat], lon=[query_lon],
+        mode="markers",
+        marker=dict(size=14, color="#ff6f00", symbol="diamond",
+                    opacity=1.0, allowoverlap=True),
+        selected=dict(marker=dict(size=14, color="#ff6f00", opacity=1.0)),
+        unselected=dict(marker=dict(size=14, color="#ff6f00", opacity=1.0)),
+        hovertemplate=(
+            f"<b>Query Point</b><br>E: {query_e:.1f}  N: {query_n:.1f}<extra></extra>"
+        ),
+        showlegend=False, name="_query",
+    ))
+
+    # Compute auto-zoom from borehole spread
+    lat_span = float(lats_bh.max() - lats_bh.min())
+    lon_span = float(lons_bh.max() - lons_bh.min())
+    span_deg = max(lat_span, lon_span, 0.01)
+    zoom = int(np.clip(np.log2(0.7 / span_deg) + 12, 9, 15))
+
+    mapbox_cfg: dict = dict(center=dict(lat=lat_c, lon=lon_c), zoom=zoom)
+    if satellite:
+        mapbox_cfg["style"]  = "white-bg"
+        mapbox_cfg["layers"] = [{
+            "sourcetype": "raster",
+            "source": [
+                "https://server.arcgisonline.com/ArcGIS/rest/services/"
+                "World_Imagery/MapServer/tile/{z}/{y}/{x}"
+            ],
+            "below": "traces",
+        }]
+    else:
+        mapbox_cfg["style"] = "open-street-map"
+
+    fig.update_layout(
+        mapbox=mapbox_cfg,
+        height=380, margin=dict(l=0, r=0, t=36, b=0),
+        showlegend=False,
+        clickmode="event+select",
+        title=dict(
+            text="Plan View — click anywhere to set coords; click borehole to add to section",
+            x=0.5, font=dict(size=11),
+        ),
+    )
+    return fig
+
+
 # ── View 3: Cross-Section ─────────────────────────────────────────────────────
 def _borehole_interfaces(layer_dict: dict, layer_sequence: list[str]) -> list[float]:
     interfaces, current = [], 0.0
@@ -639,6 +841,7 @@ _SS_DEFAULTS: dict = {
     "virtual_borehole": None,
     "_plan_sel_id":     None,
     "_cs_sel_id":       None,
+    "_map_style":       "Abstract",
 }
 for _k, _v in _SS_DEFAULTS.items():
     if _k not in st.session_state:
@@ -889,37 +1092,80 @@ with tab3:
     # ── Left column: interactive plan view ────────────────────────────────────
     with col_plan:
         st.markdown("#### Plan View")
+
+        # Map-style toggle
+        _prev_style = st.session_state.get("_map_style", "Abstract")
+        _map_style  = st.radio(
+            "Map style",
+            ["Abstract", "Street Map", "Satellite"],
+            horizontal=True,
+            index=["Abstract", "Street Map", "Satellite"].index(_prev_style),
+        )
+        if _map_style != _prev_style:
+            st.session_state._plan_sel_id = None   # reset fingerprint on style change
+        st.session_state._map_style = _map_style
+
         st.markdown(
             "<p style='font-size:.85rem;color:#666;margin-top:-6px;margin-bottom:4px;'>"
             "Click anywhere to set E/N coords. Click a borehole to also add it to the section.</p>",
             unsafe_allow_html=True,
         )
 
-        plan_fig   = build_planview_figure(
-            st.session_state.cs_ordered,
-            st.session_state._query_easting,
-            st.session_state._query_northing,
-        )
-        plan_event = st.plotly_chart(
-            plan_fig,
-            use_container_width=True,
-            on_select="rerun",
-            selection_mode=["points"],
-            config={"displayModeBar": False, "scrollZoom": False},
-            key="plan_view_chart",
-        )
+        _plan_pts  = None   # selection points from whichever chart fires
+        _is_mapbox = False
 
-        # Process plan-view click (Feature 1)
-        if plan_event and plan_event.selection and plan_event.selection.points:
-            pts    = plan_event.selection.points
-            sel_id = str([(p.get("curve_number"), p.get("point_index")) for p in pts])
+        if _map_style == "Abstract":
+            plan_fig   = build_planview_figure(
+                st.session_state.cs_ordered,
+                st.session_state._query_easting,
+                st.session_state._query_northing,
+            )
+            plan_event = st.plotly_chart(
+                plan_fig,
+                use_container_width=True,
+                on_select="rerun",
+                selection_mode=["points"],
+                config={"displayModeBar": False, "scrollZoom": False},
+                key="plan_view_chart",
+            )
+            if plan_event and plan_event.selection and plan_event.selection.points:
+                _plan_pts  = plan_event.selection.points
+                _is_mapbox = False
+        else:
+            mapbox_fig = build_mapbox_figure(
+                st.session_state.cs_ordered,
+                st.session_state._query_easting,
+                st.session_state._query_northing,
+                satellite=(_map_style == "Satellite"),
+            )
+            mapbox_event = st.plotly_chart(
+                mapbox_fig,
+                use_container_width=True,
+                on_select="rerun",
+                selection_mode=["points"],
+                config={"displayModeBar": False},
+                key="mapbox_view_chart",
+            )
+            if mapbox_event and mapbox_event.selection and mapbox_event.selection.points:
+                _plan_pts  = mapbox_event.selection.points
+                _is_mapbox = True
+
+        # Process plan-view click — shared for Abstract and Mapbox (Feature 1)
+        if _plan_pts is not None:
+            sel_id = str([(p.get("curve_number"), p.get("point_index")) for p in _plan_pts])
 
             if sel_id != st.session_state._plan_sel_id:
                 st.session_state._plan_sel_id = sel_id
-                pt    = pts[0]
+                pt    = _plan_pts[0]
                 curve = pt.get("curve_number", -1)
-                new_e = float(pt["x"])
-                new_n = float(pt["y"])
+
+                if _is_mapbox:
+                    lat_c = float(pt.get("lat", 13.75))
+                    lon_c = float(pt.get("lon", 100.5))
+                    new_e, new_n = _latlon_to_utm47n(lat_c, lon_c)
+                else:
+                    new_e = float(pt["x"])
+                    new_n = float(pt["y"])
 
                 changed = (
                     abs(new_e - st.session_state._query_easting)  > 1.0
