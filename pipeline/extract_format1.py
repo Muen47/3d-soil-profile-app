@@ -330,7 +330,10 @@ def extract_pdf(pdf_path: str) -> list[dict]:
     doc.close()
 
     # Stamp header fields and deduplicate / sort
-    bh_id    = header.get("borehole_id") or os.path.splitext(source)[0]
+    # Always use the filename stem as borehole_id (prevents _1/_2 variants from
+    # overwriting the primary borehole when the PDF header shows the same ID)
+    stem_id  = os.path.splitext(source)[0].replace("_", "-")
+    bh_id    = stem_id  # filename is authoritative; PDF header may duplicate
     easting  = header.get("easting") or ""
     northing = header.get("northing") or ""
 
@@ -429,7 +432,10 @@ def main():
             print(f"  ERROR: {e}")
             continue
 
-        bh_id = rows[0]["borehole_id"] if rows else stem
+        if not rows:
+            print(f"  WARNING: no samples extracted — skipping")
+            continue
+        bh_id = rows[0]["borehole_id"]
         print(f"  Borehole: {bh_id}  |  E={rows[0]['easting']}  N={rows[0]['northing']}"
               f"  |  {len(rows)} samples")
 
