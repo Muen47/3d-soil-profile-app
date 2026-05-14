@@ -28,7 +28,7 @@ STAGE2_TARGETS = ["su_kpa", "spt_n", "unit_weight", "plasticity_idx"]
 
 _DEFAULT_MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "models")
 _DEFAULT_DATA_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "data", "bangkok_boring_logs.csv"
+    os.path.dirname(__file__), "..", "data", "bangkok_boring_logs_real.csv"
 )
 
 

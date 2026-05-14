@@ -30,7 +30,7 @@ warnings.filterwarnings("ignore")
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "bangkok_boring_logs.csv")
+DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "bangkok_boring_logs_real.csv")
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "models")
 os.makedirs(MODEL_DIR, exist_ok=True)
 
@@ -150,10 +150,14 @@ def _rf_classifier(train):
 
 def _xgb_classifier(train):
     X = make_stage1_X(train)
-    y = label_enc.transform(train["soil_layer"])
+    # Use a per-fold encoder so labels are always [0..n_classes-1]
+    # (global label_enc can produce gaps when a class is absent from the fold)
+    fold_enc = LabelEncoder().fit(train["soil_layer"])
+    y = fold_enc.transform(train["soil_layer"])
     clf = XGBClassifier(n_estimators=200, random_state=42,
                         eval_metric="mlogloss", verbosity=0)
     clf.fit(X, y)
+    clf._fold_enc = fold_enc  # carry encoder alongside model for inverse-transform
     return clf
 
 
@@ -164,7 +168,8 @@ def _rf_clf_predict(model, train, row):
 
 def _xgb_clf_predict(model, train, row):
     x = np.array([[row["easting"], row["northing"], row["depth_m"]]])
-    return label_enc.inverse_transform(model.predict(x))[0]
+    fold_idx = int(model.predict(x)[0])
+    return model._fold_enc.inverse_transform([fold_idx])[0]
 
 
 def _dwa_clf_predict(_, train, row):

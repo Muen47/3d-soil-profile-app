@@ -22,7 +22,7 @@ st.set_page_config(
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 _ROOT     = os.path.dirname(os.path.abspath(__file__))
-DATA_PATH = os.path.join(_ROOT, "data", "bangkok_boring_logs.csv")
+DATA_PATH = os.path.join(_ROOT, "data", "bangkok_boring_logs_real.csv")
 MODEL_DIR = os.path.join(_ROOT, "models")
 
 LAYER_SEQUENCE = ["MG", "VSC", "SOC", "SC", "SS", "MSC", "FS"]
