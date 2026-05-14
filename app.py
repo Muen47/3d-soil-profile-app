@@ -630,9 +630,9 @@ def _confidence_bar(conf: float) -> None:
 
 # ── Session state initialisation ──────────────────────────────────────────────
 _SS_DEFAULTS: dict = {
-    "query_easting":    658871.0,
-    "query_northing":   1522280.0,
-    "query_depth":      10.0,
+    "_query_easting":   658871.0,   # internal — NOT bound to any widget key
+    "_query_northing":  1522280.0,
+    "_query_depth":     10.0,
     "result":           None,
     "pred_coords":      None,
     "cs_ordered":       [],
@@ -656,11 +656,21 @@ with st.sidebar:
     st.divider()
 
     st.markdown("#### Query Point")
-    # Keys bind inputs to session state; programmatic updates take effect on next rerun
-    st.number_input("Easting (m)",  step=1.0,  format="%.1f", key="query_easting")
-    st.number_input("Northing (m)", step=1.0,  format="%.1f", key="query_northing")
-    st.number_input("Depth (m)", min_value=0.1, max_value=200.0,
-                    step=0.5, key="query_depth")
+    # No key= on these widgets — value= is set from the internal _query_* state.
+    # Returning the widget value and writing it back to the internal key lets
+    # programmatic updates (map clicks) set _query_* without triggering the
+    # StreamlitAPIException that occurs when writing a widget-bound key.
+    _e = st.number_input("Easting (m)",  step=1.0, format="%.1f",
+                         value=float(st.session_state._query_easting))
+    st.session_state._query_easting = _e
+
+    _n = st.number_input("Northing (m)", step=1.0, format="%.1f",
+                         value=float(st.session_state._query_northing))
+    st.session_state._query_northing = _n
+
+    _d = st.number_input("Depth (m)", min_value=0.1, max_value=200.0, step=0.5,
+                         value=float(st.session_state._query_depth))
+    st.session_state._query_depth = _d
 
     st.divider()
     st.markdown("#### Prediction Method")
@@ -685,8 +695,8 @@ with st.sidebar:
     # Mini plan view — always visible regardless of active tab (Feature 3)
     st.plotly_chart(
         build_mini_planview(
-            st.session_state.query_easting,
-            st.session_state.query_northing,
+            st.session_state._query_easting,
+            st.session_state._query_northing,
         ),
         use_container_width=True,
         config={"displayModeBar": False, "staticPlot": True},
@@ -702,28 +712,28 @@ with st.sidebar:
 if run:
     with st.spinner("Running prediction..."):
         st.session_state.result = predictor.predict(
-            st.session_state.query_easting,
-            st.session_state.query_northing,
-            st.session_state.query_depth,
+            st.session_state._query_easting,
+            st.session_state._query_northing,
+            st.session_state._query_depth,
             method,
         )
         st.session_state.pred_coords = (
-            st.session_state.query_easting,
-            st.session_state.query_northing,
-            st.session_state.query_depth,
+            st.session_state._query_easting,
+            st.session_state._query_northing,
+            st.session_state._query_depth,
         )
 
 if run_column:
     with st.spinner("Predicting full soil column 0–60 m..."):
         vb_rows = predictor.predict_column(
-            st.session_state.query_easting,
-            st.session_state.query_northing,
+            st.session_state._query_easting,
+            st.session_state._query_northing,
             list(range(0, 62, 2)),
             method,
         )
         st.session_state.virtual_borehole = {
-            "easting": st.session_state.query_easting,
-            "northing": st.session_state.query_northing,
+            "easting": st.session_state._query_easting,
+            "northing": st.session_state._query_northing,
             "method": method_label,
             "rows": vb_rows,
         }
@@ -835,9 +845,9 @@ with tab1:
                        f"{pi_std:.1f}%" if pi_std is not None else None, "#8e24aa")
             st.caption(
                 f"Method: **{method_label}**  |  "
-                f"E {st.session_state.query_easting:.1f}  "
-                f"N {st.session_state.query_northing:.1f}  |  "
-                f"Depth {st.session_state.query_depth:.1f} m"
+                f"E {st.session_state._query_easting:.1f}  "
+                f"N {st.session_state._query_northing:.1f}  |  "
+                f"Depth {st.session_state._query_depth:.1f} m"
             )
 
     with st.expander("Borehole Dataset", expanded=False):
@@ -887,8 +897,8 @@ with tab3:
 
         plan_fig   = build_planview_figure(
             st.session_state.cs_ordered,
-            st.session_state.query_easting,
-            st.session_state.query_northing,
+            st.session_state._query_easting,
+            st.session_state._query_northing,
         )
         plan_event = st.plotly_chart(
             plan_fig,
@@ -912,8 +922,8 @@ with tab3:
                 new_n = float(pt["y"])
 
                 changed = (
-                    abs(new_e - st.session_state.query_easting)  > 1.0
-                    or abs(new_n - st.session_state.query_northing) > 1.0
+                    abs(new_e - st.session_state._query_easting)  > 1.0
+                    or abs(new_n - st.session_state._query_northing) > 1.0
                 )
 
                 # Borehole click (curve 1): also add to section selection
@@ -926,8 +936,8 @@ with tab3:
 
                 # curve 3 = query-point diamond: ignore coordinate update
                 if curve != 3 and changed:
-                    st.session_state.query_easting  = new_e
-                    st.session_state.query_northing = new_n
+                    st.session_state._query_easting  = new_e
+                    st.session_state._query_northing = new_n
                     st.rerun()
                 elif curve == 1 and changed:
                     st.rerun()
@@ -1042,9 +1052,9 @@ with tab3:
                                                 - float(bpos_idx.loc[b0, "northing"])))
                                 break
 
-                        st.session_state.query_easting  = new_e
-                        st.session_state.query_northing = new_n
-                        st.session_state.query_depth    = d_click
+                        st.session_state._query_easting  = new_e
+                        st.session_state._query_northing = new_n
+                        st.session_state._query_depth    = d_click
                         st.rerun()
 
             st.caption(
