@@ -186,6 +186,15 @@ predictor = _get_predictor()
 df        = _get_df()
 bh_pos    = _get_bh_pos(df)
 
+# Default Mapbox viewport — computed once so _SS_DEFAULTS can reference them
+_MAP_LATS, _MAP_LONS = _utm47n_to_latlon_arr(
+    bh_pos["easting"].values, bh_pos["northing"].values
+)
+_MAP_LAT_C = float(np.mean(_MAP_LATS))
+_MAP_LON_C = float(np.mean(_MAP_LONS))
+_MAP_SPAN  = max(float(_MAP_LATS.ptp()), float(_MAP_LONS.ptp()), 0.01)
+_MAP_ZOOM  = int(np.clip(np.log2(0.7 / _MAP_SPAN) + 12, 9, 15))
+
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
 def _hex_rgba(hex_color: str, alpha: float = 0.85) -> str:
@@ -549,6 +558,10 @@ def build_mapbox_figure(
     query_e: float,
     query_n: float,
     satellite: bool = False,
+    center_lat: float | None = None,
+    center_lon: float | None = None,
+    zoom: int | None = None,
+    uirevision: str = "mapbox_view",
 ) -> go.Figure:
     selected_set = set(selected)
 
@@ -557,8 +570,8 @@ def build_mapbox_figure(
     )
     query_lat, query_lon = _utm47n_to_latlon(query_e, query_n)
 
-    lat_c = float(np.mean(lats_bh))
-    lon_c = float(np.mean(lons_bh))
+    lat_c = center_lat if center_lat is not None else float(np.mean(lats_bh))
+    lon_c = center_lon if center_lon is not None else float(np.mean(lons_bh))
 
     # Ghost grid in lat/lon — captures clicks anywhere on the map
     lat_lo = float(lats_bh.min()) - 0.06
@@ -635,11 +648,12 @@ def build_mapbox_figure(
         showlegend=False, name="_query",
     ))
 
-    # Compute auto-zoom from borehole spread
-    lat_span = float(lats_bh.max() - lats_bh.min())
-    lon_span = float(lons_bh.max() - lons_bh.min())
-    span_deg = max(lat_span, lon_span, 0.01)
-    zoom = int(np.clip(np.log2(0.7 / span_deg) + 12, 9, 15))
+    # Zoom: use passed-in value or compute from borehole spread
+    if zoom is None:
+        lat_span = float(lats_bh.max() - lats_bh.min())
+        lon_span = float(lons_bh.max() - lons_bh.min())
+        span_deg = max(lat_span, lon_span, 0.01)
+        zoom = int(np.clip(np.log2(0.7 / span_deg) + 12, 9, 15))
 
     mapbox_cfg: dict = dict(center=dict(lat=lat_c, lon=lon_c), zoom=zoom)
     if satellite:
@@ -661,6 +675,7 @@ def build_mapbox_figure(
         showlegend=False,
         clickmode="event+select",
         dragmode="zoom",
+        uirevision=uirevision,
         title=dict(
             text="Plan View — click anywhere to set coords; click borehole to add to section",
             x=0.5, font=dict(size=11),
@@ -843,6 +858,10 @@ _SS_DEFAULTS: dict = {
     "_plan_sel_id":     None,
     "_cs_sel_id":       None,
     "_map_style":       "Abstract",
+    "_map_center_lat":  _MAP_LAT_C,
+    "_map_center_lon":  _MAP_LON_C,
+    "_map_zoom":        _MAP_ZOOM,
+    "_map_uirev":       0,
 }
 for _k, _v in _SS_DEFAULTS.items():
     if _k not in st.session_state:
@@ -1133,11 +1152,24 @@ with tab3:
                 _plan_pts  = plan_event.selection.points
                 _is_mapbox = False
         else:
+            # "Fit All Boreholes" button — resets viewport to show all boreholes
+            if st.button("Fit All Boreholes", key="fit_all_btn",
+                         use_container_width=False):
+                st.session_state._map_center_lat = _MAP_LAT_C
+                st.session_state._map_center_lon = _MAP_LON_C
+                st.session_state._map_zoom       = _MAP_ZOOM
+                st.session_state._map_uirev     += 1
+                st.rerun()
+
             mapbox_fig = build_mapbox_figure(
                 st.session_state.cs_ordered,
                 st.session_state._query_easting,
                 st.session_state._query_northing,
                 satellite=(_map_style == "Satellite"),
+                center_lat=st.session_state._map_center_lat,
+                center_lon=st.session_state._map_center_lon,
+                zoom=st.session_state._map_zoom,
+                uirevision=f"mapbox_view_{st.session_state._map_uirev}",
             )
             mapbox_event = st.plotly_chart(
                 mapbox_fig,
