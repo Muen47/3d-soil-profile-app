@@ -562,7 +562,6 @@ def build_mapbox_figure(
     center_lat: float | None = None,
     center_lon: float | None = None,
     zoom: int | None = None,
-    uirevision: str = "mapbox_view",
 ) -> go.Figure:
     selected_set = set(selected)
 
@@ -676,7 +675,6 @@ def build_mapbox_figure(
         showlegend=False,
         clickmode="event+select",
         dragmode="zoom",
-        uirevision=uirevision,
         title=dict(
             text="Plan View — click anywhere to set coords; click borehole to add to section",
             x=0.5, font=dict(size=11),
@@ -862,7 +860,6 @@ _SS_DEFAULTS: dict = {
     "_map_center_lat":  _MAP_LAT_C,
     "_map_center_lon":  _MAP_LON_C,
     "_map_zoom":        _MAP_ZOOM,
-    "_map_uirev":       0,
 }
 for _k, _v in _SS_DEFAULTS.items():
     if _k not in st.session_state:
@@ -1153,13 +1150,12 @@ with tab3:
                 _plan_pts  = plan_event.selection.points
                 _is_mapbox = False
         else:
-            # "Fit All Boreholes" button — resets viewport to show all boreholes
+            # "Fit All Boreholes" button — writes fit-all values to session state
             if st.button("Fit All Boreholes", key="fit_all_btn",
                          use_container_width=False):
                 st.session_state._map_center_lat = _MAP_LAT_C
                 st.session_state._map_center_lon = _MAP_LON_C
                 st.session_state._map_zoom       = _MAP_ZOOM
-                st.session_state._map_uirev     += 1
                 st.rerun()
 
             mapbox_fig = build_mapbox_figure(
@@ -1170,7 +1166,6 @@ with tab3:
                 center_lat=st.session_state._map_center_lat,
                 center_lon=st.session_state._map_center_lon,
                 zoom=st.session_state._map_zoom,
-                uirevision=f"mapbox_view_{st.session_state._map_uirev}",
             )
             mapbox_event = st.plotly_chart(
                 mapbox_fig,
