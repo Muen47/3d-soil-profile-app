@@ -123,6 +123,21 @@ class SoilPredictor:
 
     # ── public API ──────────────────────────────────────────────────────────
 
+    def predict_column(
+        self,
+        easting: float,
+        northing: float,
+        depths,
+        method: str = "rf",
+    ) -> list[dict]:
+        """Run predict() at every depth in *depths* and return the list of result dicts."""
+        results = []
+        for d in depths:
+            r = self.predict(easting, northing, float(d), method)
+            r["depth_m"] = float(d)
+            results.append(r)
+        return results
+
     def predict(self, easting: float, northing: float, depth: float,
                 method: str = "rf") -> dict:
         """
