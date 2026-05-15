@@ -1150,6 +1150,7 @@ with tab3:
             help="Type borehole IDs separated by commas to select them in order. "
                  "Clicking boreholes on the map also updates this box.",
         )
+        st.caption("Your selection above updates automatically — copy it anytime to reload later.")
 
         # Parse text → resolve to canonical IDs → sync to cs_ordered
         _raw_tokens = [t.strip() for t in _text_val.split(",") if t.strip()]
@@ -1285,13 +1286,6 @@ with tab3:
                         st.rerun()
         else:
             st.caption("No boreholes selected yet.")
-
-        st.text_input(
-            "📋 Save this string to reload your selection later:",
-            value=", ".join(st.session_state.cs_ordered),
-            disabled=True,
-            key="_cs_readout",
-        )
 
         st.markdown("")
         col_a, col_b = st.columns(2)
