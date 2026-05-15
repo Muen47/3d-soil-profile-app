@@ -1152,8 +1152,10 @@ with tab3:
                 selection_mode=["points"],
                 config={
                     "displayModeBar": True,
+                    "displaylogo": False,
                     "scrollZoom": True,
                     "modeBarButtons": [["pan2d", "zoomIn2d", "zoomOut2d", "resetScale2d"]],
+                    "modeBarButtonsToAdd": ["toggleFullscreen"],
                 },
                 key="plan_view_chart",
             )
@@ -1288,7 +1290,12 @@ with tab3:
                 use_container_width=True,
                 on_select="rerun",
                 selection_mode=["points"],
-                config={"displayModeBar": True, "scrollZoom": False},
+                config={
+                    "displayModeBar": True,
+                    "displaylogo": False,
+                    "scrollZoom": False,
+                    "modeBarButtonsToAdd": ["toggleFullscreen"],
+                },
                 key="cs_chart",
             )
 
