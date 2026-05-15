@@ -1150,6 +1150,8 @@ with tab3:
                  "Clicking boreholes on the map also updates this box.",
         )
 
+        st.caption("Type borehole IDs separated by commas. Order determines the cross-section direction.")
+
         # Parse text → resolve to canonical IDs → sync to cs_ordered
         _raw_tokens = [t.strip() for t in _text_val.split(",") if t.strip()]
         _parsed = list(dict.fromkeys(          # deduplicate, preserve order
