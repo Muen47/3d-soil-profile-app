@@ -559,10 +559,24 @@ def build_planview_figure(
             bgcolor="rgba(255,255,255,0.7)", borderpad=1,
         )
 
+    # Auto-fit range — include boreholes + query point + any virtual BH locations
+    all_e = list(bh_pos["easting"]) + [query_e]
+    all_n = list(bh_pos["northing"]) + [query_n]
+    if virtual_bhs:
+        all_e += [v["easting"]  for v in virtual_bhs]
+        all_n += [v["northing"] for v in virtual_bhs]
+    e_span = max(float(max(all_e)) - float(min(all_e)), 500.0)
+    n_span = max(float(max(all_n)) - float(min(all_n)), 500.0)
+    e_margin = e_span * 0.12
+    n_margin = n_span * 0.12
+    x_range = [float(min(all_e)) - e_margin, float(max(all_e)) + e_margin]
+    y_range = [float(min(all_n)) - n_margin, float(max(all_n)) + n_margin]
+
     fig.update_layout(
         height=320, margin=dict(l=10, r=10, t=36, b=10),
-        xaxis=dict(title="Easting (m)", tickformat=".0f"),
-        yaxis=dict(title="Northing (m)", tickformat=".0f", scaleanchor="x"),
+        xaxis=dict(title="Easting (m)", tickformat=".0f", range=x_range),
+        yaxis=dict(title="Northing (m)", tickformat=".0f", scaleanchor="x",
+                   range=y_range),
         showlegend=False, paper_bgcolor="white", plot_bgcolor="#f5f7fa",
         title=dict(
             text="Plan View — click anywhere to set coords; click borehole to add to section",
@@ -1136,7 +1150,11 @@ with tab3:
                 use_container_width=True,
                 on_select="rerun",
                 selection_mode=["points"],
-                config={"displayModeBar": False, "scrollZoom": False},
+                config={
+                    "displayModeBar": True,
+                    "scrollZoom": True,
+                    "modeBarButtons": [["pan2d", "zoomIn2d", "zoomOut2d", "resetScale2d"]],
+                },
                 key="plan_view_chart",
             )
             if plan_event and plan_event.selection and plan_event.selection.points:
