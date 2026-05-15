@@ -1141,6 +1141,7 @@ with tab3:
             st.session_state._cs_text_raw  = ", ".join(st.session_state.cs_ordered)
             st.session_state._cs_ordered_fp = _current_fp
 
+        st.caption("Type borehole IDs separated by commas. Order determines the cross-section direction.")
         _text_val = st.text_input(
             "Borehole selection",
             placeholder="e.g. OW-01, OW-05, OW-12, OW-20",
@@ -1149,8 +1150,6 @@ with tab3:
             help="Type borehole IDs separated by commas to select them in order. "
                  "Clicking boreholes on the map also updates this box.",
         )
-
-        st.caption("Type borehole IDs separated by commas. Order determines the cross-section direction.")
 
         # Parse text → resolve to canonical IDs → sync to cs_ordered
         _raw_tokens = [t.strip() for t in _text_val.split(",") if t.strip()]
