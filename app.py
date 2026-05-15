@@ -914,6 +914,8 @@ _SS_DEFAULTS: dict = {
     "_map_center_lon":  _MAP_LON_C,
     "_map_zoom":        _MAP_ZOOM,
     "_max_display_depth": 80,
+    "_cs_text_raw":     "",   # raw text in the borehole-selection text box
+    "_cs_ordered_fp":   "",   # fingerprint of cs_ordered last reflected in the text box
 }
 for _k, _v in _SS_DEFAULTS.items():
     if _k not in st.session_state:
@@ -1111,6 +1113,8 @@ with tab2:
 # ══ Tab 3 — 2D Cross-Section ══════════════════════════════════════════════════
 with tab3:
     all_bh_ids = sorted(df["borehole_id"].unique().tolist())
+    # Case-insensitive lookup: "ow-01" → "OW-01" (the canonical ID in the dataset)
+    _bh_lookup = {b.upper(): b for b in all_bh_ids}
     col_plan, col_cs = st.columns([2, 3], gap="large")
 
     # ── Left column: interactive plan view ────────────────────────────────────
@@ -1129,8 +1133,42 @@ with tab3:
             st.session_state._plan_sel_id = None   # reset fingerprint on style change
         st.session_state._map_style = _map_style
 
+        # ── Borehole selection text input (syncs both ways with map clicks) ──────
+        # When cs_ordered changes via a map click the fingerprint becomes stale,
+        # so we push the new value into the text-box widget before it renders.
+        _current_fp = ",".join(st.session_state.cs_ordered)
+        if _current_fp != st.session_state._cs_ordered_fp:
+            st.session_state._cs_text_raw  = ", ".join(st.session_state.cs_ordered)
+            st.session_state._cs_ordered_fp = _current_fp
+
+        _text_val = st.text_input(
+            "Borehole selection",
+            placeholder="e.g. OW-01, OW-05, OW-12, OW-20",
+            key="_cs_text_raw",
+            label_visibility="collapsed",
+            help="Type borehole IDs separated by commas to select them in order. "
+                 "Clicking boreholes on the map also updates this box.",
+        )
+
+        # Parse text → resolve to canonical IDs → sync to cs_ordered
+        _raw_tokens = [t.strip() for t in _text_val.split(",") if t.strip()]
+        _parsed = list(dict.fromkeys(          # deduplicate, preserve order
+            _bh_lookup[t.upper()]
+            for t in _raw_tokens
+            if t.upper() in _bh_lookup
+        ))
+        _invalid = [t for t in _raw_tokens if t.upper() not in _bh_lookup]
+        if _invalid:
+            st.caption(f"⚠ Unrecognized ID(s) ignored: {', '.join(_invalid)}")
+
+        if _parsed != st.session_state.cs_ordered:
+            st.session_state.cs_ordered     = _parsed
+            st.session_state._cs_ordered_fp = ",".join(_parsed)
+            st.rerun()
+        # ── end text input ──────────────────────────────────────────────────────
+
         st.markdown(
-            "<p style='font-size:.85rem;color:#666;margin-top:-6px;margin-bottom:4px;'>"
+            "<p style='font-size:.85rem;color:#666;margin-top:2px;margin-bottom:4px;'>"
             "Click anywhere to set E/N coords. Click a borehole to also add it to the section.</p>",
             unsafe_allow_html=True,
         )
