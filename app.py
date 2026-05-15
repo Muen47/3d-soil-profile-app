@@ -1286,6 +1286,13 @@ with tab3:
         else:
             st.caption("No boreholes selected yet.")
 
+        st.text_input(
+            "📋 Save this string to reload your selection later:",
+            value=", ".join(st.session_state.cs_ordered),
+            disabled=True,
+            key="_cs_readout",
+        )
+
         st.markdown("")
         col_a, col_b = st.columns(2)
         with col_a:
