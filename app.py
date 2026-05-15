@@ -5,6 +5,7 @@ from collections import defaultdict
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "pipeline"))
 
 import streamlit as st
+import streamlit.components.v1 as components
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
@@ -1142,15 +1143,30 @@ with tab3:
             st.session_state._cs_ordered_fp = _current_fp
 
         st.caption("Type borehole IDs separated by commas. Order determines the cross-section direction.")
-        _text_val = st.text_input(
-            "Borehole selection",
-            placeholder="e.g. OW-01, OW-05, OW-12, OW-20",
-            key="_cs_text_raw",
-            label_visibility="collapsed",
-            help="Type borehole IDs separated by commas to select them in order. "
-                 "Clicking boreholes on the map also updates this box.",
-        )
+        _col_txt, _col_btn = st.columns([4, 1])
+        with _col_txt:
+            _text_val = st.text_input(
+                "Borehole selection",
+                placeholder="e.g. OW-01, OW-05, OW-12, OW-20",
+                key="_cs_text_raw",
+                label_visibility="collapsed",
+                help="Type borehole IDs separated by commas to select them in order. "
+                     "Clicking boreholes on the map also updates this box.",
+            )
+        with _col_btn:
+            st.write(" ")  # spacer to align button baseline with the text input
+            _copy_clicked = st.button("📋", help="Copy selection to clipboard",
+                                      use_container_width=True)
         st.caption("Your selection above updates automatically — copy it anytime to reload later.")
+
+        if _copy_clicked:
+            _copy_str = ", ".join(st.session_state.cs_ordered)
+            components.html(
+                f"<script>navigator.clipboard.writeText({repr(_copy_str)})"
+                f".catch(function(e){{console.error('Clipboard error:', e)}});</script>",
+                height=0,
+            )
+            st.toast("Copied to clipboard! 📋")
 
         # Parse text → resolve to canonical IDs → sync to cs_ordered
         _raw_tokens = [t.strip() for t in _text_val.split(",") if t.strip()]
