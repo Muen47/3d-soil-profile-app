@@ -225,6 +225,7 @@ def build_figure(
     pred_point: tuple | None = None,
     pred_layer: str | None = None,
     virtual_bhs: list | None = None,
+    depth_limit: float = 80.0,
 ) -> go.Figure:
     fig = go.Figure()
 
@@ -273,7 +274,7 @@ def build_figure(
         ve   = vbh["easting"]
         vn   = vbh["northing"]
         vname = vbh.get("name", f"VBH-{int(ve)}-{int(vn)}")
-        rows = vbh["rows"]
+        rows = [r for r in vbh["rows"] if r["depth_m"] <= depth_limit]
         all_depths = [r["depth_m"] for r in rows]
 
         fig.add_trace(go.Scatter3d(
@@ -314,6 +315,7 @@ def build_figure(
         scene=dict(
             xaxis_title="Easting (m)", yaxis_title="Northing (m)",
             zaxis_title="- Depth (m)", bgcolor="#f0f4f8",
+            zaxis=dict(range=[-depth_limit, 0]),
             aspectmode="manual", aspectratio=dict(x=1, y=1, z=2.5),
             camera=dict(eye=dict(x=1.8, y=1.8, z=0.7)),
         ),
@@ -369,7 +371,7 @@ def get_layer_bounds(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
-def build_solid_figure(df: pd.DataFrame) -> go.Figure:
+def build_solid_figure(df: pd.DataFrame, depth_limit: float = 80.0) -> go.Figure:
     bounds = get_layer_bounds(df)
     fig    = go.Figure()
 
@@ -430,6 +432,7 @@ def build_solid_figure(df: pd.DataFrame) -> go.Figure:
         scene=dict(
             xaxis_title="Easting (m)", yaxis_title="Northing (m)",
             zaxis_title="- Depth (m)", bgcolor="#e8edf2",
+            zaxis=dict(range=[-depth_limit, 0]),
             aspectmode="manual", aspectratio=dict(x=1, y=1, z=2.5),
             camera=dict(eye=dict(x=1.6, y=1.6, z=0.8)),
         ),
@@ -729,7 +732,7 @@ def _borehole_interfaces(layer_dict: dict, layer_sequence: list[str]) -> list[fl
     return interfaces
 
 
-def build_crosssection_figure(df: pd.DataFrame, selected: list[str]) -> go.Figure:
+def build_crosssection_figure(df: pd.DataFrame, selected: list[str], depth_limit: float = 80.0) -> go.Figure:
     bounds   = get_layer_bounds(df)
     bpos_idx = bh_pos.set_index("borehole_id")
 
@@ -758,15 +761,15 @@ def build_crosssection_figure(df: pd.DataFrame, selected: list[str]) -> go.Figur
 
     ifaces    = {bh: _borehole_interfaces(bh_layer[bh], LAYER_SEQUENCE) for bh in valid_sel}
     max_depth = max(max(v) for v in ifaces.values())
-    max_depth = max(max_depth * 1.05, 10.0)
+    max_depth = min(max(max_depth * 1.05, 10.0), depth_limit)
 
     fig = go.Figure()
     xs  = [bh_x[bh] for bh in valid_sel]
 
     # Filled layer bands
     for li, layer in enumerate(LAYER_SEQUENCE):
-        tops = [ifaces[bh][li]     for bh in valid_sel]
-        bots = [ifaces[bh][li + 1] for bh in valid_sel]
+        tops = [min(ifaces[bh][li],     depth_limit) for bh in valid_sel]
+        bots = [min(ifaces[bh][li + 1], depth_limit) for bh in valid_sel]
         if all(abs(t - b) < 1e-6 for t, b in zip(tops, bots)):
             continue
         color_hex = LAYER_COLORS.get(layer, "#aaaaaa")
@@ -785,13 +788,14 @@ def build_crosssection_figure(df: pd.DataFrame, selected: list[str]) -> go.Figur
     for bh in valid_sel:
         x_pos   = bh_x[bh]
         col_bot = ifaces[bh][-1]
-        fig.add_shape(type="line", x0=x_pos, x1=x_pos, y0=0, y1=col_bot,
+        stick_bot = min(col_bot, depth_limit)
+        fig.add_shape(type="line", x0=x_pos, x1=x_pos, y0=0, y1=stick_bot,
                       line=dict(color="#111111", width=1.8), layer="above")
         fig.add_annotation(x=x_pos, y=0, text=f"<b>{bh}</b>",
                            showarrow=False, yshift=14,
                            font=dict(size=10, color="#111"),
                            bgcolor="rgba(255,255,255,0.85)", borderpad=2)
-        for d_tick in np.arange(10, col_bot + 1, 10):
+        for d_tick in np.arange(10, stick_bot + 1, 10):
             fig.add_annotation(x=x_pos, y=d_tick, text=f"{int(d_tick)}m",
                                showarrow=False, xshift=7,
                                font=dict(size=7, color="#444"))
@@ -895,6 +899,7 @@ _SS_DEFAULTS: dict = {
     "_map_center_lat":  _MAP_LAT_C,
     "_map_center_lon":  _MAP_LON_C,
     "_map_zoom":        _MAP_ZOOM,
+    "_max_display_depth": 80,
 }
 for _k, _v in _SS_DEFAULTS.items():
     if _k not in st.session_state:
@@ -936,6 +941,17 @@ with st.sidebar:
     method = METHOD_MAP[method_label]
     if method == "xgb":
         st.caption("XGBoost does not provide per-prediction uncertainty estimates.")
+
+    st.divider()
+    st.markdown("#### Display Settings")
+    st.number_input(
+        "Max Display Depth (m)",
+        min_value=20, max_value=300,
+        value=st.session_state._max_display_depth,
+        step=5,
+        key="_max_display_depth",
+        help="Hides data deeper than this value and clamps the Z / Y axis on all views.",
+    )
 
     st.divider()
     run        = st.button("Run Prediction",           type="primary", use_container_width=True)
@@ -1026,6 +1042,14 @@ result      = st.session_state.result
 pred_coords = st.session_state.pred_coords
 vbhs        = st.session_state.virtual_boreholes
 
+max_depth        = int(st.session_state._max_display_depth)
+df_view          = df[df["depth_m"] <= max_depth].copy()
+pred_coords_view = (
+    pred_coords
+    if pred_coords is None or pred_coords[2] <= max_depth
+    else None
+)
+
 
 # ── Header ────────────────────────────────────────────────────────────────────
 st.markdown(
@@ -1045,8 +1069,9 @@ tab1, tab2, tab3 = st.tabs([
 # ══ Tab 1 — 3D Borehole View ══════════════════════════════════════════════════
 with tab1:
     pred_layer = result["layer"] if result else None
-    fig3d = build_figure(df, pred_point=pred_coords,
-                         pred_layer=pred_layer, virtual_bhs=vbhs)
+    fig3d = build_figure(df_view, pred_point=pred_coords_view,
+                         pred_layer=pred_layer, virtual_bhs=vbhs,
+                         depth_limit=max_depth)
     st.plotly_chart(fig3d, use_container_width=True,
                     config={"displayModeBar": True, "scrollZoom": True})
 
@@ -1060,7 +1085,7 @@ with tab2:
         unsafe_allow_html=True,
     )
     with st.spinner("Building 3D solid model..."):
-        solid_fig = build_solid_figure(df)
+        solid_fig = build_solid_figure(df_view, depth_limit=max_depth)
     st.plotly_chart(solid_fig, use_container_width=True,
                     config={"displayModeBar": True, "scrollZoom": True})
     st.caption(
@@ -1238,7 +1263,8 @@ with tab3:
                 "Order matters — section is drawn in the order you select them."
             )
         else:
-            cs_fig   = build_crosssection_figure(df, st.session_state.cs_ordered)
+            cs_fig   = build_crosssection_figure(df_view, st.session_state.cs_ordered,
+                                                  depth_limit=max_depth)
             cs_event = st.plotly_chart(
                 cs_fig,
                 use_container_width=True,
