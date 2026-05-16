@@ -30,22 +30,31 @@ LAYER_SEQUENCE = ["MG", "VSC", "SOC", "SC", "SS", "MSC", "FS"]
 
 LAYER_COLORS = {
     "MG":  "#8D6E63",
-    "VSC": "#4FC3F7",
-    "SOC": "#1E88E5",
-    "SC":  "#1565C0",
-    "MSC": "#0D2B6B",
-    "FS":  "#FFB74D",
-    "SS":  "#F9A825",
+    "VSC": "#4FC3F7",   # Soft Clay (merged VSC + SOC)
+    "SOC": "#4FC3F7",   # Soft Clay (merged VSC + SOC)
+    "SC":  "#1565C0",   # Medium Stiff Clay
+    "MSC": "#0D2B6B",   # Stiff Clay
+    "FS":  "#F9A825",   # Sand (merged FS + SS)
+    "SS":  "#F9A825",   # Sand (merged FS + SS)
 }
 LAYER_LABELS = {
     "MG":  "Made Ground / Fill",
-    "VSC": "Very Soft Clay",
-    "SOC": "Soft Clay",
-    "SC":  "Stiff Clay",
-    "MSC": "Medium-Hard Clay",
-    "FS":  "Firm Sand (transition)",
-    "SS":  "Sand",
+    "VSC": "Soft Clay",           # merged display: VSC + SOC → Soft Clay
+    "SOC": "Soft Clay",           # merged display: VSC + SOC → Soft Clay
+    "SC":  "Medium Stiff Clay",
+    "MSC": "Stiff Clay",
+    "FS":  "Sand",                # merged display: FS + SS → Sand
+    "SS":  "Sand",                # merged display: FS + SS → Sand
 }
+# Unique (color, display_label) pairs in LAYER_SEQUENCE order — use for HTML legends
+_LEGEND_ITEMS: list[tuple[str, str]] = []
+_seen_lbl: set[str] = set()
+for _lyr in LAYER_SEQUENCE:
+    _lbl = LAYER_LABELS.get(_lyr, _lyr)
+    if _lbl not in _seen_lbl:
+        _seen_lbl.add(_lbl)
+        _LEGEND_ITEMS.append((LAYER_COLORS[_lyr], _lbl))
+del _seen_lbl, _lyr, _lbl
 METHOD_MAP = {
     "Distance-Weighted Average": "dwa",
     "Random Forest":             "rf",
@@ -211,7 +220,7 @@ def _hover(row) -> str:
     uw  = f"{row['unit_weight']:.2f} kN/m3" if pd.notna(row.get("unit_weight")) else "--"
     return (
         f"<b>{row['borehole_id']}</b><br>"
-        f"Layer: {row['soil_layer']} - {row['soil_desc']}<br>"
+        f"Layer: {LAYER_LABELS.get(row['soil_layer'], row['soil_layer'])}<br>"
         f"Depth: {row['depth_m']:.1f} m "
         f"({row['depth_top_m']:.1f}-{row['depth_bot_m']:.1f} m)<br>"
         f"Consistency: {row.get('consistency') or '--'}<br>"
@@ -241,19 +250,23 @@ def build_figure(
         ))
 
     # Sample markers coloured by layer
+    _lbl_seen: set[str] = set()
     for layer, color in LAYER_COLORS.items():
         sub = df[df["soil_layer"] == layer]
         if sub.empty:
             continue
+        _lbl = LAYER_LABELS.get(layer, layer)
         fig.add_trace(go.Scatter3d(
             x=sub["easting"], y=sub["northing"], z=-sub["depth_m"],
             mode="markers",
             marker=dict(size=9, color=color, opacity=0.88,
                         line=dict(color="white", width=0.6)),
-            name=f"{layer}  {LAYER_LABELS.get(layer, '')}",
+            name=_lbl,
+            showlegend=_lbl not in _lbl_seen,
             text=sub.apply(_hover, axis=1).tolist(),
             hovertemplate="%{text}<extra></extra>",
         ))
+        _lbl_seen.add(_lbl)
 
     # Single-point prediction diamond
     if pred_point is not None:
@@ -266,7 +279,7 @@ def build_figure(
             name="Prediction point",
             hovertemplate=(
                 f"<b>Prediction Point</b><br>E: {e:.1f}  N: {n:.1f}<br>"
-                f"Depth: {d:.1f} m<br>Layer: {pred_layer or '--'}<extra></extra>"
+                f"Depth: {d:.1f} m<br>Layer: {LAYER_LABELS.get(pred_layer, pred_layer) if pred_layer else '--'}<extra></extra>"
             ),
         ))
 
@@ -299,7 +312,7 @@ def build_figure(
                 spt_s = f"{r['spt_n']:.0f}"       if r.get("spt_n")   is not None else "--"
                 texts.append(
                     f"<b>{vname}</b><br>Depth: {r['depth_m']:.0f} m<br>"
-                    f"Layer: {layer}<br>su: {su_s}  SPT-N: {spt_s}<br>"
+                    f"Layer: {LAYER_LABELS.get(layer, layer)}<br>su: {su_s}  SPT-N: {spt_s}<br>"
                     f"Confidence: {r.get('layer_confidence', 0)*100:.0f}%"
                 )
             fig.add_trace(go.Scatter3d(
@@ -399,14 +412,15 @@ def build_solid_figure(df: pd.DataFrame, depth_limit: float = 80.0) -> go.Figure
         Zt, Zb = it(GE, GN), ib(GE, GN)
         if (~(np.isnan(Zt) | np.isnan(Zb))).sum() < 4:
             continue
+        _disp_lbl = LAYER_LABELS.get(layer, layer)
         for Z, lbl in [(Zt, "top"), (Zb, "bot")]:
             fig.add_trace(go.Surface(
                 x=GE, y=GN, z=-Z,
                 colorscale=[[0, color_rgb], [1, color_rgb]],
                 showscale=False, opacity=0.7,
-                name=f"{layer} {lbl}", showlegend=False,
+                name=f"{_disp_lbl} {lbl}", showlegend=False,
                 hovertemplate=(
-                    f"<b>{layer} — {LAYER_LABELS.get(layer,'')}</b><br>{lbl}<br>"
+                    f"<b>{_disp_lbl}</b><br>{lbl}<br>"
                     "E: %{x:.0f}  N: %{y:.0f}<br>Depth: %{z:.1f} m<extra></extra>"
                 ),
                 lighting=dict(ambient=0.7, diffuse=0.5, specular=0.1),
@@ -422,11 +436,16 @@ def build_solid_figure(df: pd.DataFrame, depth_limit: float = 80.0) -> go.Figure
             name=bh_id, showlegend=False, hoverinfo="skip",
         ))
 
+    _lbl_seen_solid: set[str] = set()
     for layer, color in LAYER_COLORS.items():
+        _lbl = LAYER_LABELS.get(layer, layer)
+        if _lbl in _lbl_seen_solid:
+            continue
+        _lbl_seen_solid.add(_lbl)
         fig.add_trace(go.Scatter3d(
             x=[None], y=[None], z=[None], mode="markers",
             marker=dict(size=10, color=color, opacity=0.85),
-            name=f"{layer}  {LAYER_LABELS.get(layer, '')}",
+            name=_lbl,
         ))
 
     fig.update_layout(
@@ -782,6 +801,7 @@ def build_crosssection_figure(df: pd.DataFrame, selected: list[str], depth_limit
     xs  = [bh_x[bh] for bh in valid_sel]
 
     # Filled layer bands
+    _lbl_seen_cs: set[str] = set()
     for li, layer in enumerate(LAYER_SEQUENCE):
         tops = [min(ifaces[bh][li],     depth_limit) for bh in valid_sel]
         bots = [min(ifaces[bh][li + 1], depth_limit) for bh in valid_sel]
@@ -790,14 +810,17 @@ def build_crosssection_figure(df: pd.DataFrame, selected: list[str], depth_limit
         color_hex = LAYER_COLORS.get(layer, "#aaaaaa")
         poly_x = xs + list(reversed(xs)) + [xs[0]]
         poly_y = tops + list(reversed(bots)) + [tops[0]]
+        _lbl = LAYER_LABELS.get(layer, layer)
         fig.add_trace(go.Scatter(
             x=poly_x, y=poly_y, fill="toself",
             fillcolor=_hex_rgba(color_hex, 0.82),
             line=dict(color=_hex_rgba(color_hex, 1.0), width=1.2),
             mode="lines",
-            name=f"{layer}  {LAYER_LABELS.get(layer, '')}",
+            name=_lbl,
+            showlegend=_lbl not in _lbl_seen_cs,
             hoverinfo="skip",
         ))
+        _lbl_seen_cs.add(_lbl)
 
     # Borehole sticks + labels + depth ticks
     for bh in valid_sel:
@@ -1315,12 +1338,11 @@ with tab3:
                 st.rerun()
 
         st.markdown("**Legend**")
-        for lyr, color in LAYER_COLORS.items():
+        for _color, _lbl in _LEGEND_ITEMS:
             st.markdown(
                 f'<span style="display:inline-block;width:12px;height:12px;'
-                f'background:{color};border-radius:2px;margin-right:6px;'
-                f'vertical-align:middle;"></span>'
-                f"**{lyr}** — {LAYER_LABELS.get(lyr, '')}",
+                f'background:{_color};border-radius:2px;margin-right:6px;'
+                f'vertical-align:middle;"></span>{_lbl}',
                 unsafe_allow_html=True,
             )
 
@@ -1418,12 +1440,11 @@ with col_res:
             "then click **Run Prediction**."
         )
         st.markdown("**Soil Layer Legend**")
-        for lyr, color in LAYER_COLORS.items():
+        for _color, _lbl in _LEGEND_ITEMS:
             st.markdown(
                 f'<span style="display:inline-block;width:12px;height:12px;'
-                f'background:{color};border-radius:2px;margin-right:6px;'
-                f'vertical-align:middle;"></span>'
-                f"**{lyr}** — {LAYER_LABELS.get(lyr, '')}",
+                f'background:{_color};border-radius:2px;margin-right:6px;'
+                f'vertical-align:middle;"></span>{_lbl}',
                 unsafe_allow_html=True,
             )
     else:
@@ -1436,8 +1457,7 @@ with col_res:
             f'box-shadow:0 2px 8px rgba(0,0,0,.18);">'
             f'<div style="font-size:.72rem;opacity:.85;font-weight:700;'
             f'text-transform:uppercase;letter-spacing:.1em;">Predicted Soil Layer</div>'
-            f'<div style="font-size:2.1rem;font-weight:800;margin:4px 0 2px;">{layer}</div>'
-            f'<div style="font-size:.92rem;opacity:.9;">{LAYER_LABELS.get(layer, "")}</div>'
+            f'<div style="font-size:2.1rem;font-weight:800;margin:4px 0 2px;">{LAYER_LABELS.get(layer, layer)}</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
