@@ -1664,7 +1664,7 @@ with tab4:
         ("Distribution - Su.jpg",           "Undrained Shear Strength"),
         ("Distribution - SPT.png",          "SPT-N"),
         ("Distribution - LL.png",           "Liquid Limit"),
-        ("Distribution - Pl.png",           "Plasticity Index (Pl)"),
+        ("Distribution - PI.png",           "Plasticity Index (PI)"),
         ("Distribution - PL.png",           "Plastic Limit (PL)"),
     ])
 
@@ -1676,7 +1676,7 @@ with tab4:
         ("Curve - Su.png",          "Undrained Shear Strength vs Depth"),
         ("Curve - SPT.jpg",         "SPT-N vs Depth"),
         ("Curve - LL.jpg",          "Liquid Limit vs Depth"),
-        ("Curve - Pl.png",          "Plasticity Index vs Depth"),
+        ("Curve - PI.png",          "Plasticity Index vs Depth"),
         ("Curve - PL.jpg",          "Plastic Limit vs Depth"),
     ])
 
