@@ -26,7 +26,7 @@ _ROOT     = os.path.dirname(os.path.abspath(__file__))
 DATA_PATH = os.path.join(_ROOT, "data", "bangkok_boring_logs_real.csv")
 MODEL_DIR = os.path.join(_ROOT, "models")
 
-LAYER_SEQUENCE = ["MG", "VSC", "SOC", "SC", "SS", "MSC", "FS"]
+LAYER_SEQUENCE = ["MG", "VSC", "SOC", "MSC", "SC", "SS", "FS"]
 
 LAYER_COLORS = {
     "MG":  "#8D6E63",
