@@ -222,10 +222,11 @@ def _load_soil_props(file_bytes: bytes) -> dict:
         "Plastic Limit, PL":         "pl_pct",
         "Plasticity Index, PI":      "pi_pct",
     }
-    xl = pd.ExcelFile(io.BytesIO(file_bytes))
+    xl = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
     result = {}
     for sheet in xl.sheet_names:
-        raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet, header=None)
+        raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet,
+                            header=None, engine="openpyxl")
         raw_cols = raw.iloc[0, 1:].tolist()
         data = raw.iloc[2:, 1:].copy()
         data.columns = [col_rename.get(str(c).strip(), str(c)) for c in raw_cols]
