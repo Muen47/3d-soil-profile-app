@@ -1639,20 +1639,53 @@ with tab3:
 
 
 # ══ Tab 4 — Dataset Overview ══════════════════════════════════════════════════
-with tab4:
-    st.markdown("#### Distribution of Total Unit Weight by Soil Stratum")
-    st.image(
-        os.path.join(_ROOT, "assets", "Distribution - Unit weight.jpg"),
-        use_column_width=False,
-        width=200,
-    )
+def _img(filename):
+    """Return absolute path to an asset image."""
+    return os.path.join(_ROOT, "assets", filename)
 
-    st.markdown("#### Water Content vs Depth")
-    st.image(
-        os.path.join(_ROOT, "assets", "Water Content - Depth.jpg"),
-        use_column_width=False,
-        width=200,
-    )
+
+def _grid(items):
+    """Render a list of (filename, caption) pairs in a 2-column grid."""
+    for i in range(0, len(items), 2):
+        cols = st.columns(2)
+        for j, col in enumerate(cols):
+            if i + j < len(items):
+                fname, cap = items[i + j]
+                with col:
+                    st.image(_img(fname), caption=cap, use_column_width=True)
+
+
+with tab4:
+    # ── Section 1: Property Distributions ────────────────────────────────────
+    st.subheader("Property Distributions")
+    _grid([
+        ("Distribution - Unit weight.jpg", "Unit Weight"),
+        ("Distribution - wn.png",          "Water Content"),
+        ("Distribution - Su.jpg",           "Undrained Shear Strength"),
+        ("Distribution - SPT.png",          "SPT-N"),
+        ("Distribution - LL.png",           "Liquid Limit"),
+        ("Distribution - Pl.png",           "Plasticity Index (Pl)"),
+        ("Distribution - PL.png",           "Plastic Limit (PL)"),
+    ])
+
+    # ── Section 2: Properties vs Depth ───────────────────────────────────────
+    st.subheader("Properties vs Depth")
+    _grid([
+        ("Curve - Unit weight.jpg", "Unit Weight vs Depth"),
+        ("Curve - wn.jpg",          "Water Content vs Depth"),
+        ("Curve - Su.png",          "Undrained Shear Strength vs Depth"),
+        ("Curve - SPT.jpg",         "SPT-N vs Depth"),
+        ("Curve - LL.jpg",          "Liquid Limit vs Depth"),
+        ("Curve - Pl.png",          "Plasticity Index vs Depth"),
+        ("Curve - PL.jpg",          "Plastic Limit vs Depth"),
+    ])
+
+    # ── Section 3: Soil Profiles ─────────────────────────────────────────────
+    st.subheader("Soil Profiles")
+    _grid([
+        ("Soil profile 1.png", "Soil Profile 1"),
+        ("Soil profile 2.png", "Soil Profile 2"),
+    ])
 
 
 # ══ Permanent results panel (always visible below all tabs) ══════════════════
