@@ -8,6 +8,12 @@ Uses PyMuPDF positional word extraction to parse fixed-column tables:
   x≈305  : layer boundary depth value
   x≈460-510 : Suc kPa (ST) or SPT-N (SS)
 
+Output: ONE ROW PER LAYER BOUNDARY INTERVAL.
+  depth_top_m = depth label at boundary[i]
+  depth_bot_m = depth label at boundary[i+1]  (last layer → total borehole depth)
+  depth_m     = midpoint of the interval
+  su_kpa/spt_n = mean of all test samples whose midpoint depth falls in the interval
+
 Depth is derived from the y-pixel position of each word using a linear
 scale calibrated from the first two boundary-depth markers on each page.
 
@@ -93,36 +99,37 @@ def _is_numeric(s: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _extract_header(words: list) -> dict:
-    """Return {borehole_id, easting, northing} from page-1 header words."""
-    header = {"borehole_id": None, "easting": None, "northing": None}
-    # Sort header words left-to-right, top-to-bottom
+    """Return {borehole_id, easting, northing, total_depth} from page-1 header words."""
+    header = {"borehole_id": None, "easting": None, "northing": None, "total_depth": None}
     hw = [w for w in words if w[1] < 290]
     hw.sort(key=lambda w: (round(w[1] / 5), w[0]))
 
     # Reconstruct lines by grouping words with similar y
-    lines: list[list[str]] = []
+    lines: list[list] = []
     cur_y = -999
-    cur_line: list[str] = []
+    cur_line: list = []
     for w in hw:
         if abs(w[1] - cur_y) > 4:
             if cur_line:
                 lines.append(cur_line)
-            cur_line = [w[4]]
+            cur_line = [(w[0], w[4])]
             cur_y = w[1]
         else:
-            cur_line.append(w[4])
+            cur_line.append((w[0], w[4]))
     if cur_line:
         lines.append(cur_line)
 
     for line in lines:
-        text = " ".join(line)
+        text = " ".join(tok for _, tok in line)
         tl = text.lower()
-        # Borehole id: look for "Number:" or "No:" followed by the id
+
+        # Borehole id
         if "number" in tl or " no:" in tl or "borehole" in tl:
             m = re.search(r"(OW-\d+|BH-\d+|\bB\d+\b)", text, re.I)
             if m:
                 header["borehole_id"] = m.group(1).upper()
-        # Easting (Co-ordinate E)
+
+        # Easting
         if "co-ordinate" in tl and " e" in tl:
             nums = re.findall(r"[\d,]+", text)
             for n in nums:
@@ -130,7 +137,8 @@ def _extract_header(words: list) -> dict:
                 if v and 600000 < v < 700000:
                     header["easting"] = v
                     break
-        # Northing (Co-ordinate N)
+
+        # Northing
         if "co-ordinate" in tl and " n" in tl:
             nums = re.findall(r"[\d,]+", text)
             for n in nums:
@@ -139,7 +147,19 @@ def _extract_header(words: list) -> dict:
                     header["northing"] = v
                     break
 
-    # Fallback: scan for 6-digit easting / 7-digit northing in all header words
+        # Total borehole depth — look for "total depth", "depth of borehole", etc.
+        if header["total_depth"] is None and (
+            "total depth" in tl or "depth of borehole" in tl
+            or ("depth" in tl and "total" in tl)
+        ):
+            nums = re.findall(r"\d+(?:\.\d+)?", text)
+            for n in nums:
+                v = _to_float(n)
+                if v and 5.0 < v < 300.0:
+                    header["total_depth"] = v
+                    break
+
+    # Fallback numeric scan for easting / northing
     if header["easting"] is None or header["northing"] is None:
         all_nums = []
         for w in hw:
@@ -174,7 +194,6 @@ def _calibrate_depth_scale(words: list) -> tuple:
                 markers.append((y0, v))
 
     markers.sort(key=lambda t: t[0])
-    # Need at least two distinct depth values to calibrate scale
     for i in range(len(markers) - 1):
         y1, d1 = markers[i]
         y2, d2 = markers[i + 1]
@@ -189,115 +208,149 @@ def _y_to_depth(y, y_surface, px_per_m) -> float:
     return round((y - y_surface) / px_per_m, 2)
 
 # ---------------------------------------------------------------------------
-# Sample row extraction
+# Column x-ranges
 # ---------------------------------------------------------------------------
 TYPE_X_MIN, TYPE_X_MAX   =  90, 112   # ST / SS column
 NUM_X_MIN,  NUM_X_MAX    = 110, 132   # sample number
-DESC_X_MIN, DESC_X_MAX   = 135, 295   # soil description (stop before boundary depth column)
+DESC_X_MIN, DESC_X_MAX   = 135, 295   # soil description
 VALUE_X_MIN, VALUE_X_MAX = 455, 520   # Suc / SPT-N
 
 DATA_Y_MIN = 290   # ignore header area
 
-def _extract_samples(words: list, y_surface: float, px_per_m: float) -> list[dict]:
-    """
-    Parse sample rows from positional word data.
+# ---------------------------------------------------------------------------
+# Per-page data extraction  (returns depth-space data, not pixel-space)
+# ---------------------------------------------------------------------------
 
-    Strategy:
-    1. Collect all (type, number) pairs from TYPE_X band — these are sample rows.
-    2. Collect all boundary-depth rows from BOUNDARY_X band.
-    3. Collect all value words from VALUE_X band.
-    4. Collect description text from DESC_X band at boundary-y rows.
-    5. For each sample: assign layer boundary (nearest boundary above sample y),
-       look up value from nearest value word within tolerance.
+def _extract_page_data(
+    words: list,
+    y_surface: float,
+    px_per_m: float,
+) -> tuple[list, list]:
+    """
+    Returns
+    -------
+    boundaries : list of (depth_m: float, desc: str)
+        One entry per depth-column marker, with description text attached.
+    samples    : list of (depth_m: float, stype: str, value: float | None)
+        One entry per ST or SS sample row.
     """
     data_words = [w for w in words if w[1] >= DATA_Y_MIN]
 
-    # -- boundary depths (layer transitions) ---------------------------------
-    boundaries: list[tuple] = []  # (y, depth_m, desc)
-    boundary_ys = {}  # y -> depth_m
+    # ── Boundary depths ──────────────────────────────────────────────────────
+    raw_bounds: list[tuple[float, float]] = []   # (y_px, depth_m_from_label)
     for w in data_words:
         if BOUNDARY_X_MIN <= w[0] <= BOUNDARY_X_MAX:
             v = _to_float(w[4])
             if v is not None and 0.0 <= v <= 200.0:
-                boundaries.append((w[1], v, ""))
-                boundary_ys[round(w[1])] = v
+                raw_bounds.append((w[1], v))
 
-    # Attach description text to each boundary (grab DESC_X words within ±8px of boundary y)
-    boundary_descs: dict[float, str] = {}  # y -> desc
-    for b_y, b_depth, _ in boundaries:
+    # Attach soil description to each boundary row
+    boundaries: list[tuple[float, str]] = []
+    for b_y, b_depth in raw_bounds:
         desc_words = [
             w[4] for w in data_words
             if DESC_X_MIN <= w[0] <= DESC_X_MAX and abs(w[1] - b_y) <= 20
         ]
-        boundary_descs[b_y] = " ".join(desc_words)
+        boundaries.append((b_depth, " ".join(desc_words)))
 
-    # Sort boundaries by y
-    boundaries.sort(key=lambda t: t[0])
-
-    # -- sample type/number words --------------------------------------------
-    type_words: list[tuple] = []  # (y, "ST"/"SS")
+    # ── Test samples ─────────────────────────────────────────────────────────
+    type_words: list[tuple[float, str]] = []   # (y_px, "ST"/"SS")
     for w in data_words:
         if TYPE_X_MIN <= w[0] <= TYPE_X_MAX and w[4] in ("ST", "SS"):
             type_words.append((w[1], w[4]))
 
-    # -- value words (Suc / SPT-N) -------------------------------------------
-    value_words: list[tuple] = []  # (y, float)
+    value_words: list[tuple[float, float]] = []   # (y_px, value)
     for w in data_words:
         if VALUE_X_MIN <= w[0] <= VALUE_X_MAX:
             v = _to_float(w[4])
             if v is not None and 0.0 < v <= 500.0:
                 value_words.append((w[1], v))
 
-    # -- build sample rows ---------------------------------------------------
-    rows: list[dict] = []
+    samples: list[tuple[float, str, float | None]] = []
     for sample_y, stype in type_words:
-        depth_m = _y_to_depth(sample_y, y_surface, px_per_m)
-        if depth_m < 0:
-            depth_m = 0.0
+        depth_m = max(0.0, _y_to_depth(sample_y, y_surface, px_per_m))
 
-        # Nearest boundary strictly above this sample (or at same y)
-        layer_desc = ""
-        layer_y = None
-        for b_y, b_depth, _ in reversed(boundaries):
-            if b_y <= sample_y + 10:
-                layer_desc = boundary_descs.get(b_y, "")
-                layer_y = b_y
-                break
-
-        soil_layer = classify_layer(layer_desc) if layer_desc else "MG"
-
-        # Nearest value word within ±25 px vertically
-        best_v = None
-        best_dist = 9999
+        best_v, best_dist = None, 9999
         for v_y, v in value_words:
             dist = abs(v_y - sample_y)
             if dist < best_dist and dist <= 25:
                 best_dist = dist
                 best_v = v
 
-        su_kpa = su_method = spt_n = None
-        if best_v is not None:
-            if stype == "ST":
-                su_kpa = max(0.0, best_v)
-                su_method = "ST"
-            else:
-                spt_n = int(round(max(0, best_v)))
+        samples.append((depth_m, stype, best_v))
+
+    return boundaries, samples
+
+# ---------------------------------------------------------------------------
+# Build layer-interval rows from aggregated page data
+# ---------------------------------------------------------------------------
+
+def _build_layer_rows(
+    all_boundaries: list[tuple[float, str]],
+    all_samples: list[tuple[float, str, float | None]],
+    total_depth: float | None,
+) -> list[dict]:
+    """
+    One row per consecutive boundary interval.
+    Test-sample values are averaged per interval.
+    """
+    if not all_boundaries:
+        return []
+
+    # Deduplicate + sort boundaries by depth
+    seen_depths: set[float] = set()
+    unique: list[tuple[float, str]] = []
+    for depth, desc in sorted(all_boundaries, key=lambda x: x[0]):
+        key = round(depth, 1)
+        if key not in seen_depths:
+            seen_depths.add(key)
+            unique.append((depth, desc))
+
+    # Determine bottom of the last layer
+    if total_depth is None:
+        # Infer from deepest sample or deepest boundary + generous margin
+        all_depths = [d for d, _, _ in all_samples] + [d for d, _ in unique]
+        total_depth = round(max(all_depths) + 1.5, 2) if all_depths else unique[-1][0] + 1.5
+
+    rows: list[dict] = []
+    for i, (top_depth, desc) in enumerate(unique):
+        bot_depth = unique[i + 1][0] if i + 1 < len(unique) else total_depth
+        # Skip zero-width intervals (e.g. "End of Borehole" marker == total_depth)
+        if round(bot_depth - top_depth, 3) <= 0:
+            continue
+        bot_depth = round(bot_depth, 2)
+        mid_depth = round((top_depth + bot_depth) / 2, 2)
+        soil_layer = classify_layer(desc) if desc.strip() else "MG"
+
+        # Samples whose midpoint depth falls in [top_depth, bot_depth)
+        interval = [
+            (stype, val)
+            for s_depth, stype, val in all_samples
+            if top_depth <= s_depth < bot_depth and val is not None
+        ]
+
+        su_vals  = [val for stype, val in interval if stype == "ST"]
+        spt_vals = [val for stype, val in interval if stype == "SS"]
+
+        su_kpa    = round(sum(su_vals)  / len(su_vals),  1) if su_vals  else None
+        spt_n     = int(round(sum(spt_vals) / len(spt_vals))) if spt_vals else None
+        su_method = "ST" if su_kpa is not None else None
 
         consistency = derive_consistency(su_kpa, spt_n, soil_layer)
 
         rows.append({
-            "depth_m":    depth_m,
-            "depth_top_m": round(depth_m - 0.45, 2),
-            "depth_bot_m": round(depth_m + 0.45, 2),
-            "soil_layer": soil_layer,
-            "soil_desc":  layer_desc,
-            "consistency": consistency or "",
-            "su_kpa":     round(su_kpa, 1) if su_kpa is not None else "",
-            "su_method":  su_method or "",
-            "spt_n":      spt_n if spt_n is not None else "",
-            "unit_weight": "", "plasticity_idx": "",
-            "liquid_limit": "", "plastic_limit": "",
-            "water_content": "", "notes": "",
+            "depth_m":      mid_depth,
+            "depth_top_m":  round(top_depth, 2),
+            "depth_bot_m":  bot_depth,
+            "soil_layer":   soil_layer,
+            "soil_desc":    desc.strip(),
+            "consistency":  consistency or "",
+            "su_kpa":       round(su_kpa, 1) if su_kpa  is not None else "",
+            "su_method":    su_method or "",
+            "spt_n":        spt_n      if spt_n   is not None else "",
+            "unit_weight":    "", "plasticity_idx": "",
+            "liquid_limit":   "", "plastic_limit": "",
+            "water_content":  "", "notes": "",
         })
 
     return rows
@@ -308,13 +361,14 @@ def _extract_samples(words: list, y_surface: float, px_per_m: float) -> list[dic
 
 def extract_pdf(pdf_path: str) -> list[dict]:
     source = os.path.basename(pdf_path)
-    doc = fitz.open(pdf_path)
+    doc    = fitz.open(pdf_path)
 
     header: dict = {}
-    all_rows: list[dict] = []
+    all_boundaries: list[tuple[float, str]]              = []
+    all_samples:    list[tuple[float, str, float | None]] = []
 
     for page_no, page in enumerate(doc):
-        words = page.get_text("words")  # (x0,y0,x1,y1,word,block,line,word_no)
+        words = page.get_text("words")   # (x0,y0,x1,y1,word,block,line,word_no)
 
         if page_no == 0:
             header = _extract_header(words)
@@ -324,33 +378,27 @@ def extract_pdf(pdf_path: str) -> list[dict]:
             print(f"  [page {page_no+1}] WARNING: could not calibrate depth scale — skipping")
             continue
 
-        page_rows = _extract_samples(words, y_surface, px_per_m)
-        all_rows.extend(page_rows)
+        bounds, samples = _extract_page_data(words, y_surface, px_per_m)
+        all_boundaries.extend(bounds)
+        all_samples.extend(samples)
 
     doc.close()
 
-    # Stamp header fields and deduplicate / sort
-    # Always use the filename stem as borehole_id (prevents _1/_2 variants from
-    # overwriting the primary borehole when the PDF header shows the same ID)
+    rows = _build_layer_rows(all_boundaries, all_samples, header.get("total_depth"))
+
+    # Stamp header fields
     stem_id  = os.path.splitext(source)[0].replace("_", "-")
-    bh_id    = stem_id  # filename is authoritative; PDF header may duplicate
-    easting  = header.get("easting") or ""
+    bh_id    = stem_id
+    easting  = header.get("easting")  or ""
     northing = header.get("northing") or ""
 
-    seen_depths: set = set()
-    final: list[dict] = []
-    for r in sorted(all_rows, key=lambda x: x["depth_m"]):
-        key = round(r["depth_m"], 1)
-        if key in seen_depths:
-            continue
-        seen_depths.add(key)
+    for r in rows:
         r["borehole_id"] = bh_id
         r["easting"]     = easting
         r["northing"]    = northing
         r["source_file"] = source
-        final.append(r)
 
-    return final
+    return rows
 
 # ---------------------------------------------------------------------------
 # CSV helpers
@@ -390,14 +438,27 @@ def _append_rows(rows: list[dict], csv_path: str) -> None:
 # ---------------------------------------------------------------------------
 
 def _print_rows(rows: list[dict]) -> None:
-    print(f"\n  {'depth_m':>7}  {'type':4}  {'layer':5}  {'su_kpa':>6}  {'spt_n':>5}  {'desc'}")
-    print(f"  {'-'*7}  {'-'*4}  {'-'*5}  {'-'*6}  {'-'*5}  {'-'*40}")
+    print(f"\n  {'top_m':>6} {'bot_m':>6} {'mid_m':>6}  {'layer':5}  {'su_kpa':>6}  {'spt_n':>5}  {'desc'}")
+    print(f"  {'-'*6} {'-'*6} {'-'*6}  {'-'*5}  {'-'*6}  {'-'*5}  {'-'*40}")
+    prev_bot = None
     for r in rows:
-        stype = "ST" if r["su_kpa"] != "" else ("SS" if r["spt_n"] != "" else "  ")
+        top = r["depth_top_m"]
+        bot = r["depth_bot_m"]
+        mid = r["depth_m"]
+        gap = ""
+        if prev_bot is not None and abs(float(top) - float(prev_bot)) > 0.01:
+            gap = f"  *** GAP {prev_bot}→{top} ***"
         su    = f"{r['su_kpa']:>6}" if r["su_kpa"] != "" else "      "
         spt   = f"{r['spt_n']:>5}" if r["spt_n"]  != "" else "     "
-        desc  = str(r["soil_desc"])[:50]
-        print(f"  {r['depth_m']:7.2f}  {stype:4}  {r['soil_layer']:5}  {su}  {spt}  {desc}")
+        desc  = str(r["soil_desc"])[:40]
+        print(f"  {float(top):6.2f} {float(bot):6.2f} {float(mid):6.2f}  {r['soil_layer']:5}  {su}  {spt}  {desc}{gap}")
+        prev_bot = bot
+    if rows:
+        gaps = sum(
+            1 for i in range(1, len(rows))
+            if abs(float(rows[i]["depth_top_m"]) - float(rows[i-1]["depth_bot_m"])) > 0.01
+        )
+        print(f"\n  {len(rows)} layer rows  |  gaps between rows: {gaps}")
 
 
 def main():
@@ -433,11 +494,11 @@ def main():
             continue
 
         if not rows:
-            print(f"  WARNING: no samples extracted — skipping")
+            print(f"  WARNING: no layers extracted — skipping")
             continue
         bh_id = rows[0]["borehole_id"]
         print(f"  Borehole: {bh_id}  |  E={rows[0]['easting']}  N={rows[0]['northing']}"
-              f"  |  {len(rows)} samples")
+              f"  |  {len(rows)} layer intervals")
 
         if args.show or args.pdf:
             _print_rows(rows)
@@ -447,7 +508,7 @@ def main():
             total_rows += len(rows)
 
     print(f"\n{'='*60}")
-    print(f"Total: {total_rows} sample rows saved to {args.csv}")
+    print(f"Total: {total_rows} layer rows saved to {args.csv}")
 
 
 if __name__ == "__main__":
