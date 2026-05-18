@@ -1308,10 +1308,11 @@ st.markdown(
 )
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "3D Borehole View",
     "3D Solid Model",
     "2D Cross-Section",
+    "Dataset Overview",
 ])
 
 
@@ -1635,6 +1636,21 @@ with tab3:
                 "Layer boundaries interpolated between boreholes — "
                 "click anywhere on the section to update the query coordinates and depth."
             )
+
+
+# ══ Tab 4 — Dataset Overview ══════════════════════════════════════════════════
+with tab4:
+    st.markdown("#### Distribution of Total Unit Weight by Soil Stratum")
+    st.image(
+        os.path.join(_ROOT, "assets", "Distribution - Unit weight.jpg"),
+        use_column_width=True,
+    )
+
+    st.markdown("#### Water Content vs Depth")
+    st.image(
+        os.path.join(_ROOT, "assets", "Water Content - Depth.jpg"),
+        use_column_width=True,
+    )
 
 
 # ══ Permanent results panel (always visible below all tabs) ══════════════════
