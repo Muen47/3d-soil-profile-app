@@ -1021,41 +1021,17 @@ def build_crosssection_figure(
                     present = False   # isolated → treat as absent
             effective[bh][layer] = present
 
-    # ── Optional extrapolation: inject Sand horizon at truncated boreholes ───
-    # Boreholes that ended in clay (MSC/SC) without reaching Sand are given a
-    # virtual SS layer.  Its top depth is linearly interpolated (np.interp,
-    # flat-clamp outside range) from the x-positions of neighbouring boreholes
-    # that DO have Sand.  The boundary stack's `max` clamp below ensures the
-    # injected top is never placed above the existing borehole bottom, so the
-    # clay layers stay intact and Sand fills from the borehole terminus down.
-    _SAND_LAYERS = {"SS", "FS"}
+    # ── Optional extrapolation: extend every borehole's deepest layer to fill ─
+    # When enabled, push the final boundary of every borehole to depth_limit so
+    # the section has no white space below truncated boreholes.  The deepest
+    # layer's color simply fills downward — no inter-borehole interpolation.
     if extrapolate:
-        # Collect reference points: (section-x, sand-top-depth) for boreholes
-        # that genuinely have Sand data.
-        _sand_ref_x:   list[float] = []
-        _sand_ref_top: list[float] = []
         for _bh in valid_sel:
-            if not any(effective[_bh].get(_sl, False) for _sl in _SAND_LAYERS):
-                continue
-            _ss_top: float | None = None
-            for _sl in ["SS", "FS"]:
-                if effective[_bh].get(_sl, False) and _sl in bh_data[_bh]:
-                    _t, _ = bh_data[_bh][_sl]
-                    _ss_top = _t if _ss_top is None else min(_ss_top, _t)
-            if _ss_top is not None:
-                _sand_ref_x.append(bh_x[_bh])
-                _sand_ref_top.append(_ss_top)
-
-        if _sand_ref_x:
-            for _bh in valid_sel:
-                if any(effective[_bh].get(_sl, False) for _sl in _SAND_LAYERS):
-                    continue   # already has Sand — nothing to do
-                # Linearly interpolate (flat-clamp at ends) the Sand top depth
-                _ss_interp = float(np.interp(bh_x[_bh], _sand_ref_x, _sand_ref_top))
-                # Inject virtual SS; boundary stack's `max` clamp guarantees
-                # it cannot start shallower than the existing borehole bottom.
-                bh_data[_bh]["SS"] = (_ss_interp, depth_limit)
-                effective[_bh]["SS"] = True
+            for _lyr in reversed(LAYER_SEQUENCE):
+                if effective[_bh][_lyr]:
+                    _t, _b = bh_data[_bh][_lyr]
+                    bh_data[_bh][_lyr] = (_t, depth_limit)
+                    break
 
     # ── Fix 2: shared boundary stack — guarantees zero gaps ──────────────────
     # Compute N+1 interface depths per borehole (N = len(LAYER_SEQUENCE)).
