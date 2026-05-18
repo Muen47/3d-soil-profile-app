@@ -960,7 +960,12 @@ def _borehole_interfaces(layer_dict: dict, layer_sequence: list[str]) -> list[fl
     return interfaces
 
 
-def build_crosssection_figure(df: pd.DataFrame, selected: list[str], depth_limit: float = 80.0) -> go.Figure:
+def build_crosssection_figure(
+    df: pd.DataFrame,
+    selected: list[str],
+    depth_limit: float = 80.0,
+    extrapolate: bool = False,
+) -> go.Figure:
     bounds   = get_layer_bounds(df)   # borehole_id, soil_layer, top, bot
     bpos_idx = bh_pos.set_index("borehole_id")
 
@@ -1031,6 +1036,23 @@ def build_crosssection_figure(df: pd.DataFrame, selected: list[str], depth_limit
             else:
                 bdry.append(bdry[-1])                   # pinch-out
         bh_bdry[bh] = bdry
+
+    # ── Optional extrapolation: extend truncated boreholes to depth_limit ────
+    # For boreholes whose deepest effective layer is not Sand (SS/FS) — i.e.
+    # the borehole terminated within clay before reaching the sand horizon —
+    # push the final boundary down to depth_limit so the section is fully
+    # filled.  This is an assumption: the bottom layer continues beyond the
+    # borehole depth.  Disabled by default.
+    _SAND_LAYERS = {"SS", "FS"}
+    if extrapolate:
+        for bh in valid_sel:
+            deepest_eff = None
+            for _lyr in reversed(LAYER_SEQUENCE):
+                if effective[bh][_lyr]:
+                    deepest_eff = _lyr
+                    break
+            if deepest_eff not in _SAND_LAYERS and deepest_eff is not None:
+                bh_bdry[bh][-1] = depth_limit   # stretch last layer to bottom
 
     # ── Axis limits ───────────────────────────────────────────────────────────
     max_depth = min(max(bh_bdry[bh][-1] for bh in valid_sel) * 1.05, depth_limit)
@@ -1680,6 +1702,21 @@ with tab3:
             unsafe_allow_html=True,
         )
 
+        _extrapolate = st.checkbox(
+            "Extrapolate bottom layer to max depth",
+            value=False,
+            help=(
+                "When enabled, boreholes that terminated in clay (MSC/SC) without "
+                "reaching Sand are extended downward — the deepest layer fills the "
+                "remaining section depth. Off by default."
+            ),
+        )
+        if _extrapolate:
+            st.caption(
+                "⚠️ Extrapolation assumes the bottom layer continues beyond borehole "
+                "depth. Use with caution."
+            )
+
         if len(st.session_state.cs_ordered) < 2:
             st.info(
                 "Click 2 or more boreholes on the plan view to draw a cross-section. "
@@ -1687,7 +1724,8 @@ with tab3:
             )
         else:
             cs_fig   = build_crosssection_figure(df_view, st.session_state.cs_ordered,
-                                                  depth_limit=max_depth)
+                                                  depth_limit=max_depth,
+                                                  extrapolate=_extrapolate)
             cs_event = st.plotly_chart(
                 cs_fig,
                 use_container_width=True,
