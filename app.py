@@ -225,12 +225,26 @@ def _load_soil_props(file_bytes: bytes) -> dict:
     xl = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
     result = {}
     for sheet in xl.sheet_names:
-        raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet,
-                            header=None, engine="openpyxl")
+        raw = pd.read_excel(
+            io.BytesIO(file_bytes), sheet_name=sheet,
+            header=None, engine="openpyxl",
+        )
         raw_cols = raw.iloc[0, 1:].tolist()
-        data = raw.iloc[2:, 1:].copy()
-        data.columns = [col_rename.get(str(c).strip(), str(c)) for c in raw_cols]
-        for col in data.columns:
+        new_cols = [col_rename.get(str(c).strip(), str(c)) for c in raw_cols]
+        # Deduplicate: keep first occurrence of each column name
+        seen = {}
+        keep_idx = []
+        final_cols = []
+        for i, c in enumerate(new_cols):
+            if c not in seen:
+                seen[c] = True
+                keep_idx.append(i)
+                final_cols.append(c)
+        data = raw.iloc[2:, 1:].copy().reset_index(drop=True)
+        data = data.iloc[:, keep_idx]
+        data.columns = final_cols
+        # Convert numerics by column NAME (now guaranteed unique)
+        for col in final_cols:
             if col != "soil_type":
                 data[col] = pd.to_numeric(data[col], errors="coerce")
         data = data.dropna(subset=["depth_m"]).reset_index(drop=True)
