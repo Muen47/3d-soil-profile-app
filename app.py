@@ -1925,6 +1925,14 @@ with tab5:
                 st.plotly_chart(_reg_fig, use_container_width=True,
                                 config={"displaylogo": False})
 
+    _json_upload = st.file_uploader(
+        "Upload your own validation_results.json (optional)",
+        type=["json"],
+        help="JSON file produced by running validation.py on your own data.",
+    )
+    if _json_upload is not None:
+        st.session_state._user_uploaded_json = _json_upload.read()
+
     if st.button("🔍 View Validation Results", use_container_width=False):
         try:
             _uploaded_json = st.session_state.get("_user_uploaded_json")
