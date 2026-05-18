@@ -1855,7 +1855,17 @@ with tab5:
                 })
         if _cls_rows:
             _cls_df = pd.DataFrame(_cls_rows).set_index("Method")
-            st.dataframe(_cls_df, use_container_width=True)
+            st.dataframe(
+                _cls_df,
+                use_container_width=True,
+                column_config={
+                    "Accuracy (%)": st.column_config.NumberColumn(
+                        "Accuracy (%)",
+                        format="%.1f %%",
+                        width="medium",
+                    )
+                },
+            )
             _cls_fig = go.Figure(go.Bar(
                 x=_cls_df.index,
                 y=_cls_df["Accuracy (%)"],
