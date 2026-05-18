@@ -1203,8 +1203,25 @@ with st.sidebar:
     )
     if _xl_upload is not None:
         st.session_state.uploaded_props_data = _load_soil_props(_xl_upload.read())
+    # Auto-load bundled template as default when nothing has been uploaded yet
+    if st.session_state.uploaded_props_data is None:
+        _default_xlsx = os.path.join(_ROOT, "Soil_Properties.xlsx")
+        if os.path.exists(_default_xlsx):
+            with open(_default_xlsx, "rb") as _f:
+                st.session_state.uploaded_props_data = _load_soil_props(_f.read())
     if st.session_state.uploaded_props_data is not None:
         st.caption("✅ Lab data loaded")
+    # Download button for the data template
+    _template_path = os.path.join(_ROOT, "Soil_Properties.xlsx")
+    if os.path.exists(_template_path):
+        with open(_template_path, "rb") as _f:
+            st.download_button(
+                "📥 Download data template",
+                data=_f.read(),
+                file_name="Soil_Properties.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
 
     # Virtual borehole list — shown only when at least one exists
     if st.session_state.virtual_boreholes:
