@@ -55,6 +55,21 @@ for _lyr in LAYER_SEQUENCE:
         _seen_lbl.add(_lbl)
         _LEGEND_ITEMS.append((LAYER_COLORS[_lyr], _lbl))
 del _seen_lbl, _lyr, _lbl
+
+# ── Change 1: Bridge from Excel soil names → existing layer codes ─────────────
+SOIL_LABEL_MAP = {
+    "Fill":              "MG",
+    "Fill Material":     "MG",
+    "Soft clay":         "VSC",
+    "Medium stiff clay": "SC",
+    "1st stiff clay":    "MSC",
+    "2nd stiff clay":    "MSC",
+    "3rd stiff clay":    "MSC",
+    "1st sand":          "FS",
+    "2nd sand":          "SS",
+    "3rd sand":          "SS",
+}
+
 METHOD_MAP = {
     "Distance-Weighted Average": "dwa",
     "Random Forest":             "rf",
@@ -190,6 +205,36 @@ def _get_bh_pos(df: pd.DataFrame) -> pd.DataFrame:
           .sort_values("borehole_id")
           .reset_index(drop=True)
     )
+
+
+# ── Change 3: Cached Excel loader for lab data ────────────────────────────────
+@st.cache_data(show_spinner=False)
+def _load_soil_props(file_bytes: bytes) -> dict:
+    import io
+    col_rename = {
+        "Soil":                      "soil_type",
+        "Depth":                     "depth_m",
+        "Total Unit Weight (kN/m3)": "unit_weight",
+        "Su":                        "su_kpa",
+        "SPT N":                     "spt_n",
+        "Water Content, wn":         "wn_pct",
+        "Liquid Limit, LL":          "ll_pct",
+        "Plastic Limit, PL":         "pl_pct",
+        "Plasticity Index, PI":      "pi_pct",
+    }
+    xl = pd.ExcelFile(io.BytesIO(file_bytes))
+    result = {}
+    for sheet in xl.sheet_names:
+        raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet, header=None)
+        raw_cols = raw.iloc[0, 1:].tolist()
+        data = raw.iloc[2:, 1:].copy()
+        data.columns = [col_rename.get(str(c).strip(), str(c)) for c in raw_cols]
+        for col in data.columns:
+            if col != "soil_type":
+                data[col] = pd.to_numeric(data[col], errors="coerce")
+        data = data.dropna(subset=["depth_m"]).reset_index(drop=True)
+        result[sheet] = data
+    return result
 
 
 predictor = _get_predictor()
@@ -364,6 +409,90 @@ def build_mini_planview(query_e: float, query_n: float) -> go.Figure:
         yaxis=dict(showticklabels=False, showgrid=False, zeroline=False, scaleanchor="x"),
         paper_bgcolor="white", plot_bgcolor="#f5f7fa",
         title=dict(text="Query Location", x=0.5, font=dict(size=10)),
+    )
+    return fig
+
+
+# ── Change 5: Property vs Depth comparison chart ──────────────────────────────
+def build_property_depth_chart(
+    all_props: dict,
+    prop_col: str,
+    prop_label: str,
+    pred_depth: float | None = None,
+    pred_value: float | None = None,
+) -> go.Figure:
+    frames = []
+    for df in all_props.values():
+        if prop_col in df.columns and "soil_type" in df.columns:
+            sub = df[["soil_type", "depth_m", prop_col]].dropna()
+            if not sub.empty:
+                frames.append(sub)
+    fig = go.Figure()
+    if not frames:
+        fig.add_annotation(text=f"No {prop_label} data available",
+                           xref="paper", yref="paper", x=0.5, y=0.5,
+                           showarrow=False, font=dict(size=12, color="#888"))
+    else:
+        merged = pd.concat(frames, ignore_index=True)
+        _seen: set[str] = set()
+        for soil_name, grp in merged.groupby("soil_type"):
+            layer_code = SOIL_LABEL_MAP.get(str(soil_name).strip(), "MG")
+            color      = LAYER_COLORS.get(layer_code, "#888888")
+            disp_label = LAYER_LABELS.get(layer_code, str(soil_name))
+            valid = grp.dropna(subset=[prop_col, "depth_m"])
+            if valid.empty:
+                continue
+            fig.add_trace(go.Scatter(
+                x=valid[prop_col], y=valid["depth_m"],
+                mode="markers",
+                marker=dict(size=6, color=color, opacity=0.55,
+                            line=dict(color="white", width=0.4)),
+                name=disp_label,
+                showlegend=disp_label not in _seen,
+                legendgroup=disp_label,
+                hovertemplate=(
+                    f"<b>{disp_label}</b><br>"
+                    f"Depth: %{{y:.1f}} m<br>{prop_label}: %{{x:.2f}}<extra></extra>"
+                ),
+            ))
+            _seen.add(disp_label)
+            if len(valid) >= 4:
+                try:
+                    z = np.polyfit(valid[prop_col], valid["depth_m"], 1)
+                    x_t = np.linspace(valid[prop_col].min(), valid[prop_col].max(), 60)
+                    fig.add_trace(go.Scatter(
+                        x=x_t, y=np.polyval(z, x_t), mode="lines",
+                        line=dict(color=color, width=1.5, dash="dash"),
+                        showlegend=False, hoverinfo="skip",
+                        legendgroup=disp_label,
+                    ))
+                except Exception:
+                    pass
+    # Predicted point — red diamond, on top of everything
+    _pd = pred_depth if pred_depth is not None else float("nan")
+    _pv = pred_value if pred_value is not None else float("nan")
+    if not (np.isnan(_pd) or np.isnan(_pv)):
+        fig.add_trace(go.Scatter(
+            x=[_pv], y=[_pd], mode="markers",
+            marker=dict(size=16, color="#e53935", symbol="diamond",
+                        opacity=1.0, line=dict(color="white", width=2)),
+            name="Predicted",
+            hovertemplate=(
+                f"<b>Predicted</b><br>"
+                f"Depth: {_pd:.1f} m<br>{prop_label}: {_pv:.2f}<extra></extra>"
+            ),
+        ))
+    fig.update_layout(
+        height=370,
+        margin=dict(l=50, r=10, t=28, b=40),
+        xaxis_title=prop_label,
+        yaxis=dict(title="Depth (m)", autorange="reversed",
+                   showgrid=True, gridcolor="#e0e0e0"),
+        xaxis=dict(showgrid=True, gridcolor="#e0e0e0"),
+        legend=dict(x=1.01, y=1, xanchor="left", font=dict(size=9),
+                    bgcolor="rgba(255,255,255,0.85)",
+                    bordercolor="#ddd", borderwidth=1),
+        paper_bgcolor="white", plot_bgcolor="#f9fafb",
     )
     return fig
 
@@ -940,6 +1069,7 @@ _SS_DEFAULTS: dict = {
     "_max_display_depth": 80,
     "_cs_text_raw":     "",   # raw text in the borehole-selection text box
     "_cs_ordered_fp":   "",   # fingerprint of cs_ordered last reflected in the text box
+    "uploaded_props_data": None,   # dict[sheet_name -> DataFrame] from _load_soil_props()
 }
 for _k, _v in _SS_DEFAULTS.items():
     if _k not in st.session_state:
@@ -996,6 +1126,20 @@ with st.sidebar:
     st.divider()
     run        = st.button("Run Prediction",           type="primary", use_container_width=True)
     run_column = st.button("Predict New Borehole Here", use_container_width=True)
+
+    # ── Change 4: Lab data uploader ───────────────────────────────────────────
+    st.divider()
+    st.markdown("#### Lab Data (optional)")
+    _xl_upload = st.file_uploader(
+        "Upload Soil_Properties.xlsx",
+        type=["xlsx"],
+        help="Upload to compare predictions against lab data",
+        label_visibility="collapsed",
+    )
+    if _xl_upload is not None:
+        st.session_state.uploaded_props_data = _load_soil_props(_xl_upload.read())
+    if st.session_state.uploaded_props_data is not None:
+        st.caption("✅ Lab data loaded")
 
     # Virtual borehole list — shown only when at least one exists
     if st.session_state.virtual_boreholes:
@@ -1479,6 +1623,39 @@ with col_res:
         _prop_card("Plasticity Index PI",
                    f"{pi:.1f}"  if pi  is not None else "--", "%",
                    f"{pi_std:.1f}%" if pi_std is not None else None, "#8e24aa")
+
+        # ── Change 6: Lab data comparison charts ──────────────────────────────
+        _props = st.session_state.get("uploaded_props_data")
+        if _props is not None:
+            st.markdown("#### 📈 Comparison with Lab Data")
+            _res = st.session_state.result
+            _d  = float(_res.get("depth_m", st.session_state._query_depth))
+            def _flt(v):
+                try: return float(v)
+                except: return float("nan")
+            _su = _flt(_res.get("su_kpa"))
+            _sn = _flt(_res.get("spt_n"))
+            _uw = _flt(_res.get("unit_weight"))
+            _cc1, _cc2, _cc3 = st.columns(3)
+            with _cc1:
+                st.caption("Su (kPa) vs Depth")
+                st.plotly_chart(
+                    build_property_depth_chart(_props, "su_kpa", "Su (kPa)", _d, _su),
+                    use_container_width=True,
+                )
+            with _cc2:
+                st.caption("SPT-N vs Depth")
+                st.plotly_chart(
+                    build_property_depth_chart(_props, "spt_n", "SPT-N (blows/30cm)", _d, _sn),
+                    use_container_width=True,
+                )
+            with _cc3:
+                st.caption("Unit Weight vs Depth")
+                st.plotly_chart(
+                    build_property_depth_chart(_props, "unit_weight", "Unit Weight (kN/m³)", _d, _uw),
+                    use_container_width=True,
+                )
+
         st.caption(
             f"Method: **{method_label}**  |  "
             f"E {st.session_state._query_easting:.1f}  "
