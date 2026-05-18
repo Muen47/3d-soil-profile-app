@@ -1194,7 +1194,7 @@ with st.sidebar:
 
     # ── Change 4: Lab data uploader ───────────────────────────────────────────
     st.divider()
-    st.markdown("#### Lab Data (optional)")
+    st.subheader("Lab Data (optional)", help="The default data shown is a preset provided by the developers. To use your own data, download the template below, fill in your measurements, and upload it here.")
     _xl_upload = st.file_uploader(
         "Upload Soil_Properties.xlsx",
         type=["xlsx"],
