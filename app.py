@@ -230,9 +230,9 @@ def _load_soil_props(file_bytes: bytes) -> dict:
         raw_cols = raw.iloc[0, 1:].tolist()
         data = raw.iloc[2:, 1:].copy()
         data.columns = [col_rename.get(str(c).strip(), str(c)) for c in raw_cols]
-        for i, col in enumerate(data.columns):
+        for col in data.columns:
             if col != "soil_type":
-                data.iloc[:, i] = pd.to_numeric(data.iloc[:, i], errors="coerce")
+                data[col] = pd.to_numeric(data[col], errors="coerce")
         data = data.dropna(subset=["depth_m"]).reset_index(drop=True)
         result[sheet] = data
     return result
