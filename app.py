@@ -1748,8 +1748,10 @@ with tab3:
                         st.rerun()
 
             st.caption(
-                "Layer boundaries interpolated between boreholes — "
-                "click anywhere on the section to update the query coordinates and depth."
+                "Layer boundaries are interpolated and smoothed between boreholes for visualization. "
+                "Thin layers present at only one borehole may not be shown. "
+                "Always verify with original boring log data. "
+                "Click anywhere on the section to update the query coordinates and depth."
             )
 
 
