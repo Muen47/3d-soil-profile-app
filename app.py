@@ -211,34 +211,29 @@ def _get_bh_pos(df: pd.DataFrame) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def _load_soil_props(file_bytes: bytes) -> dict:
     import io
-    col_rename = {
-        "Soil":                      "soil_type",
-        "Depth":                     "depth_m",
-        "Total Unit Weight (kN/m3)": "unit_weight",
-        "Su":                        "su_kpa",
-        "SPT N":                     "spt_n",
-        "Water Content, wn":         "wn_pct",
-        "Liquid Limit, LL":          "ll_pct",
-        "Plastic Limit, PL":         "pl_pct",
-        "Plasticity Index, PI":      "pi_pct",
+
+    # Property-only sheets carry ONE value column. Their header text is
+    # unreliable ("Su" and "SPT" sheets mislabel it "Total Unit Weight
+    # (kN/m3)"), so the value column is named from the SHEET name instead.
+    sheet_prop = {
+        "unit weight": "unit_weight",
+        "su":          "su_kpa",
+        "spt":         "spt_n",
+        "wn":          "wn_pct",
+        "ll":          "ll_pct",
+        "pl":          "pl_pct",
+        "pi":          "pi_pct",
     }
+
     def _canon(header: str) -> str:
-        # Map a raw header to a canonical name. Exact match first, then
-        # substring heuristics so unit suffixes / wording variants still work
-        # (e.g. "Depth (m)", "Su (kPa)", "Total Unit Weight (kN/m3)").
-        h = str(header).strip()
-        if h in col_rename:
-            return col_rename[h]
-        low = h.lower()
-        if "soil" in low:
-            return "soil_type"
-        if "depth" in low:
-            return "depth_m"
-        if "unit weight" in low or "unit_weight" in low:
+        # Canonical name for a value column header on the wide soil sheets,
+        # tolerant of unit suffixes / wording variants.
+        low = str(header).strip().lower()
+        if "unit weight" in low:
             return "unit_weight"
         if "spt" in low:
             return "spt_n"
-        if "undrained" in low or low == "su" or low.startswith("su ") or low.startswith("su("):
+        if "undrained" in low or low == "su" or low.startswith("su"):
             return "su_kpa"
         if "water content" in low or low == "wn":
             return "wn_pct"
@@ -248,7 +243,7 @@ def _load_soil_props(file_bytes: bytes) -> dict:
             return "pi_pct"
         if "plastic limit" in low or low == "pl":
             return "pl_pct"
-        return h
+        return str(header).strip()
 
     xl = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
     result = {}
@@ -257,27 +252,58 @@ def _load_soil_props(file_bytes: bytes) -> dict:
             io.BytesIO(file_bytes), sheet_name=sheet,
             header=None, engine="openpyxl",
         )
+        # Strip phantom all-empty leading/trailing rows & columns so the
+        # layout is clean regardless of openpyxl's dimension behavior.
+        raw = (raw.dropna(axis=1, how="all")
+                  .dropna(axis=0, how="all")
+                  .reset_index(drop=True))
+        raw.columns = range(raw.shape[1])
         if raw.shape[0] < 3 or raw.shape[1] < 2:
             continue
-        raw_cols = raw.iloc[0, 1:].tolist()
-        new_cols = [_canon(c) for c in raw_cols]
-        # Deduplicate: keep first occurrence of each column name
-        seen = {}
-        keep_idx = []
-        final_cols = []
-        for i, c in enumerate(new_cols):
-            if c not in seen:
-                seen[c] = True
-                keep_idx.append(i)
-                final_cols.append(c)
-        data = raw.iloc[2:, 1:].copy().reset_index(drop=True)
+
+        # Locate the label row dynamically (immune to leading blank
+        # rows/columns): the first row containing a "Soil" cell and a
+        # "Depth" cell.
+        hdr = soil_col = depth_col = None
+        for r in range(min(15, raw.shape[0])):
+            row_vals = [str(v).strip().lower() for v in raw.iloc[r].tolist()]
+            s_idx = next((i for i, v in enumerate(row_vals) if v == "soil"), None)
+            d_idx = next((i for i, v in enumerate(row_vals) if "depth" in v), None)
+            if s_idx is not None and d_idx is not None:
+                hdr, soil_col, depth_col = r, s_idx, d_idx
+                break
+        if hdr is None:
+            continue
+
+        label_row = raw.iloc[hdr].tolist()
+        prop_name = sheet_prop.get(str(sheet).strip().lower())
+
+        keep_idx, final_cols, seen = [], [], set()
+        for c in range(raw.shape[1]):
+            if c == soil_col:
+                name = "soil_type"
+            elif c == depth_col:
+                name = "depth_m"
+            elif prop_name is not None:
+                name = prop_name          # property-only sheet → name by sheet
+            else:
+                name = _canon(label_row[c])
+            if name in seen:
+                continue
+            seen.add(name)
+            keep_idx.append(c)
+            final_cols.append(name)
+
+        data = raw.iloc[hdr + 1:, :].copy().reset_index(drop=True)
         data = data.iloc[:, keep_idx]
         data.columns = final_cols
-        # Convert numerics by column NAME (now guaranteed unique)
+
         for col in final_cols:
             if col != "soil_type":
                 data[col] = pd.to_numeric(data[col], errors="coerce")
-        # Skip sheets that have no usable depth column instead of crashing
+        if "soil_type" in data.columns:
+            data["soil_type"] = data["soil_type"].astype(str).str.strip()
+
         if "depth_m" not in data.columns:
             continue
         data = data.dropna(subset=["depth_m"]).reset_index(drop=True)
