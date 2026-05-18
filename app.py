@@ -521,8 +521,8 @@ def build_property_depth_chart(
             fig.add_trace(go.Scatter(
                 x=valid[prop_col], y=valid["depth_m"],
                 mode="markers",
-                marker=dict(size=6, color=color, opacity=0.55,
-                            line=dict(color="white", width=0.4)),
+                marker=dict(size=7, color=color, opacity=0.7,
+                            line=dict(color="white", width=0.5)),
                 name=disp_label,
                 showlegend=disp_label not in _seen,
                 legendgroup=disp_label,
@@ -532,41 +532,30 @@ def build_property_depth_chart(
                 ),
             ))
             _seen.add(disp_label)
-            if len(valid) >= 4:
-                try:
-                    z = np.polyfit(valid[prop_col], valid["depth_m"], 1)
-                    x_t = np.linspace(valid[prop_col].min(), valid[prop_col].max(), 60)
-                    fig.add_trace(go.Scatter(
-                        x=x_t, y=np.polyval(z, x_t), mode="lines",
-                        line=dict(color=color, width=1.5, dash="dash"),
-                        showlegend=False, hoverinfo="skip",
-                        legendgroup=disp_label,
-                    ))
-                except Exception:
-                    pass
     # Predicted point — red diamond, on top of everything
     _pd = pred_depth if pred_depth is not None else float("nan")
     _pv = pred_value if pred_value is not None else float("nan")
     if not (np.isnan(_pd) or np.isnan(_pv)):
         fig.add_trace(go.Scatter(
             x=[_pv], y=[_pd], mode="markers",
-            marker=dict(size=16, color="#e53935", symbol="diamond",
-                        opacity=1.0, line=dict(color="white", width=2)),
-            name="Predicted",
+            marker=dict(size=20, color="#e53935", symbol="diamond",
+                        opacity=1.0, line=dict(color="white", width=2.5)),
+            name="Predicted (this point)",
             hovertemplate=(
                 f"<b>Predicted</b><br>"
                 f"Depth: {_pd:.1f} m<br>{prop_label}: {_pv:.2f}<extra></extra>"
             ),
         ))
     fig.update_layout(
-        height=370,
-        margin=dict(l=50, r=10, t=28, b=40),
+        height=620,
+        margin=dict(l=60, r=25, t=20, b=90),
         xaxis_title=prop_label,
         yaxis=dict(title="Depth (m)", autorange="reversed",
-                   showgrid=True, gridcolor="#e0e0e0"),
-        xaxis=dict(showgrid=True, gridcolor="#e0e0e0"),
-        legend=dict(x=1.01, y=1, xanchor="left", font=dict(size=9),
-                    bgcolor="rgba(255,255,255,0.85)",
+                   showgrid=True, gridcolor="#e0e0e0", zeroline=False),
+        xaxis=dict(showgrid=True, gridcolor="#e0e0e0", zeroline=False),
+        legend=dict(orientation="h", yanchor="top", y=-0.10,
+                    xanchor="center", x=0.5, font=dict(size=11),
+                    bgcolor="rgba(255,255,255,0.9)",
                     bordercolor="#ddd", borderwidth=1),
         paper_bgcolor="white", plot_bgcolor="#f9fafb",
     )
@@ -1700,38 +1689,6 @@ with col_res:
                    f"{pi:.1f}"  if pi  is not None else "--", "%",
                    f"{pi_std:.1f}%" if pi_std is not None else None, "#8e24aa")
 
-        # ── Change 6: Lab data comparison charts ──────────────────────────────
-        _props = st.session_state.get("uploaded_props_data")
-        if _props is not None:
-            st.markdown("#### 📈 Comparison with Lab Data")
-            _res = st.session_state.result
-            _d  = float(_res.get("depth_m", st.session_state._query_depth))
-            def _flt(v):
-                try: return float(v)
-                except: return float("nan")
-            _su = _flt(_res.get("su_kpa"))
-            _sn = _flt(_res.get("spt_n"))
-            _uw = _flt(_res.get("unit_weight"))
-            _cc1, _cc2, _cc3 = st.columns(3)
-            with _cc1:
-                st.caption("Su (kPa) vs Depth")
-                st.plotly_chart(
-                    build_property_depth_chart(_props, "su_kpa", "Su (kPa)", _d, _su),
-                    use_container_width=True,
-                )
-            with _cc2:
-                st.caption("SPT-N vs Depth")
-                st.plotly_chart(
-                    build_property_depth_chart(_props, "spt_n", "SPT-N (blows/30cm)", _d, _sn),
-                    use_container_width=True,
-                )
-            with _cc3:
-                st.caption("Unit Weight vs Depth")
-                st.plotly_chart(
-                    build_property_depth_chart(_props, "unit_weight", "Unit Weight (kN/m³)", _d, _uw),
-                    use_container_width=True,
-                )
-
         st.caption(
             f"Method: **{method_label}**  |  "
             f"E {st.session_state._query_easting:.1f}  "
@@ -1761,6 +1718,49 @@ with col_vbh:
                         "PI (%)":          f"{r['plasticity_idx']:.1f}" if r.get("plasticity_idx") is not None else "--",
                     })
                 st.dataframe(pd.DataFrame(tbl), use_container_width=True, hide_index=True)
+
+
+# ── Change 6: Lab data comparison charts (full-width, below results) ──────────
+_props = st.session_state.get("uploaded_props_data")
+if result is not None and _props is not None:
+    st.divider()
+    st.markdown("#### 📈 Comparison with Lab Data")
+    st.caption(
+        "Lab measurements coloured by soil type; the large red diamond is "
+        "the model prediction for the current query point."
+    )
+    _res = st.session_state.result
+    _d  = float(_res.get("depth_m", st.session_state._query_depth))
+
+    def _flt(v):
+        try:
+            return float(v)
+        except Exception:
+            return float("nan")
+
+    _su = _flt(_res.get("su_kpa"))
+    _sn = _flt(_res.get("spt_n"))
+    _uw = _flt(_res.get("unit_weight"))
+    _cc1, _cc2, _cc3 = st.columns(3, gap="large")
+    with _cc1:
+        st.markdown("**Su (kPa) vs Depth**")
+        st.plotly_chart(
+            build_property_depth_chart(_props, "su_kpa", "Su (kPa)", _d, _su),
+            use_container_width=True,
+        )
+    with _cc2:
+        st.markdown("**SPT-N vs Depth**")
+        st.plotly_chart(
+            build_property_depth_chart(_props, "spt_n", "SPT-N (blows/30cm)", _d, _sn),
+            use_container_width=True,
+        )
+    with _cc3:
+        st.markdown("**Unit Weight vs Depth**")
+        st.plotly_chart(
+            build_property_depth_chart(_props, "unit_weight", "Unit Weight (kN/m³)", _d, _uw),
+            use_container_width=True,
+        )
+
 
 with st.expander("Borehole Dataset", expanded=False):
     show_cols = [
