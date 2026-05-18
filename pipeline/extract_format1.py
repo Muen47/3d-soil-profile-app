@@ -245,13 +245,17 @@ def _extract_page_data(
                 raw_bounds.append((w[1], v))
 
     # Attach soil description to each boundary row
+    _EOB_RE = re.compile(r"end\s+of\s+borehole", re.IGNORECASE)
     boundaries: list[tuple[float, str]] = []
     for b_y, b_depth in raw_bounds:
         desc_words = [
             w[4] for w in data_words
             if DESC_X_MIN <= w[0] <= DESC_X_MAX and abs(w[1] - b_y) <= 20
         ]
-        boundaries.append((b_depth, " ".join(desc_words)))
+        raw_desc = " ".join(desc_words)
+        # Strip "End of Borehole" footer text that leaks into the last boundary
+        clean_desc = _EOB_RE.sub("", raw_desc).strip(" ,./")
+        boundaries.append((b_depth, clean_desc))
 
     # ── Test samples ─────────────────────────────────────────────────────────
     type_words: list[tuple[float, str]] = []   # (y_px, "ST"/"SS")
@@ -352,6 +356,20 @@ def _build_layer_rows(
             "liquid_limit":   "", "plastic_limit": "",
             "water_content":  "", "notes": "",
         })
+
+    # Depth guard: MG below 5 m is geologically impossible — reclassify to
+    # the nearest preceding layer type (fallback: SOC).
+    last_non_mg = "SOC"
+    for row in rows:
+        if row["soil_layer"] != "MG":
+            last_non_mg = row["soil_layer"]
+        elif row["depth_top_m"] > 5:
+            row["soil_layer"] = last_non_mg
+            row["consistency"] = derive_consistency(
+                row["su_kpa"] if row["su_kpa"] != "" else None,
+                row["spt_n"]  if row["spt_n"]  != "" else None,
+                last_non_mg,
+            ) or ""
 
     return rows
 
