@@ -1930,7 +1930,7 @@ with tab5:
                     height=340,
                     margin=dict(t=50, b=30, l=40, r=20),
                     plot_bgcolor="white",
-                    legend=dict(orientation="h", y=1.12),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 )
                 st.plotly_chart(_reg_fig, use_container_width=True,
                                 config={"displaylogo": False})
