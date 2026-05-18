@@ -994,59 +994,71 @@ def build_crosssection_figure(df: pd.DataFrame, selected: list[str], depth_limit
             for _, row in sub.iterrows()
         }
 
-    # ── Pinch-out resolution ──────────────────────────────────────────────────
-    # For each borehole walk LAYER_SEQUENCE in order; if a layer is absent set
-    # top = bot = bottom of the deepest layer seen so far (zero thickness at
-    # that point).  This gives geologically correct wedge-out polygons.
-    bh_tops: dict[str, dict[str, float]] = {bh: {} for bh in valid_sel}
-    bh_bots: dict[str, dict[str, float]] = {bh: {} for bh in valid_sel}
+    # ── Fix 1: remove isolated blobs ─────────────────────────────────────────
+    # A layer at borehole i is only drawn if at least one neighbour (i-1 or
+    # i+1) also has that layer with non-zero thickness.  Isolated single-
+    # borehole presences are treated as absent to avoid lens/blob artefacts.
+    def _has_nonzero(bh, layer):
+        if layer not in bh_data[bh]:
+            return False
+        t, b = bh_data[bh][layer]
+        return (b - t) > 0.01
 
-    for bh in valid_sel:
-        last_bot = 0.0
+    effective: dict[str, dict[str, bool]] = {}
+    for idx, bh in enumerate(valid_sel):
+        effective[bh] = {}
         for layer in LAYER_SEQUENCE:
-            if layer in bh_data[bh]:
-                t, b      = bh_data[bh][layer]
-                last_bot  = b
+            present = _has_nonzero(bh, layer)
+            if present:
+                left  = idx > 0               and _has_nonzero(valid_sel[idx - 1], layer)
+                right = idx < len(valid_sel)-1 and _has_nonzero(valid_sel[idx + 1], layer)
+                if not left and not right:
+                    present = False   # isolated → treat as absent
+            effective[bh][layer] = present
+
+    # ── Fix 2: shared boundary stack — guarantees zero gaps ──────────────────
+    # Compute N+1 interface depths per borehole (N = len(LAYER_SEQUENCE)).
+    # boundary[i] is the depth of the interface ABOVE layer i.
+    # Adjacent layers share the same boundary array index, so their
+    # interpolated edge curves are numerically identical → no white gaps.
+    bh_bdry: dict[str, list[float]] = {}
+    for bh in valid_sel:
+        bdry = [0.0]
+        for layer in LAYER_SEQUENCE:
+            if effective[bh][layer]:
+                _, bot = bh_data[bh][layer]
+                bdry.append(max(float(bot), bdry[-1]))  # monotone downward
             else:
-                t = b = last_bot          # pinch-out: zero thickness
-            bh_tops[bh][layer] = t
-            bh_bots[bh][layer] = b
+                bdry.append(bdry[-1])                   # pinch-out
+        bh_bdry[bh] = bdry
 
     # ── Axis limits ───────────────────────────────────────────────────────────
-    all_bots  = [bh_bots[bh][layer] for bh in valid_sel for layer in LAYER_SEQUENCE]
-    max_depth = min(max(all_bots) * 1.05 if all_bots else 10.0, depth_limit)
+    max_depth = min(max(bh_bdry[bh][-1] for bh in valid_sel) * 1.05, depth_limit)
     max_depth = max(max_depth, 10.0)
+
+    # Dense x-grid (20 pts per segment) for smooth interpolated band edges
+    n_pts   = max(2, (len(valid_sel) - 1) * 20 + 1)
+    x_dense = np.linspace(0, cum_dist[-1], n_pts)
+
+    # Pre-interpolate all N+1 boundary curves onto the dense grid
+    bdry_curves: list[np.ndarray] = []
+    for bi in range(len(LAYER_SEQUENCE) + 1):
+        vals = [min(bh_bdry[bh][bi], depth_limit) for bh in valid_sel]
+        bdry_curves.append(np.interp(x_dense, xs, vals))
 
     fig = go.Figure()
 
-    # ── Filled layer-boundary polygons ────────────────────────────────────────
-    # For each layer interpolate top and bottom boundaries linearly between
-    # boreholes.  The polygon path is:
-    #   left → right along interpolated top boundary
-    #   right → left along interpolated bottom boundary
-    # Plotly fill="toself" closes and fills the shape.
+    # ── Filled layer bands — no border lines, so no colour seams ─────────────
     _lbl_seen_cs: set[str] = set()
+    for li, layer in enumerate(LAYER_SEQUENCE):
+        top_curve = bdry_curves[li]
+        bot_curve = bdry_curves[li + 1]
 
-    # Dense x-grid for smooth interpolated boundary lines (20 pts per segment)
-    n_pts = max(2, (len(valid_sel) - 1) * 20 + 1)
-    x_dense = np.linspace(0, cum_dist[-1], n_pts)
+        if np.all(np.abs(bot_curve - top_curve) < 1e-6):
+            continue   # zero thickness everywhere — skip
 
-    for layer in LAYER_SEQUENCE:
-        # Raw top / bot at each borehole x position (clamped to depth_limit)
-        raw_tops = [min(bh_tops[bh][layer], depth_limit) for bh in valid_sel]
-        raw_bots = [min(bh_bots[bh][layer], depth_limit) for bh in valid_sel]
-
-        # Skip if zero thickness everywhere
-        if all(abs(t - b) < 1e-6 for t, b in zip(raw_tops, raw_bots)):
-            continue
-
-        # Linear interpolation of boundary curves onto the dense x-grid
-        top_dense = np.interp(x_dense, xs, raw_tops)
-        bot_dense = np.interp(x_dense, xs, raw_bots)
-
-        # Build closed polygon
         poly_x = list(x_dense) + list(x_dense[::-1]) + [x_dense[0]]
-        poly_y = list(top_dense) + list(bot_dense[::-1]) + [top_dense[0]]
+        poly_y = list(top_curve) + list(bot_curve[::-1]) + [float(top_curve[0])]
 
         color_hex = LAYER_COLORS.get(layer, "#aaaaaa")
         _lbl = LAYER_LABELS.get(layer, layer)
@@ -1054,7 +1066,7 @@ def build_crosssection_figure(df: pd.DataFrame, selected: list[str], depth_limit
             x=poly_x, y=poly_y,
             fill="toself",
             fillcolor=_hex_rgba(color_hex, 0.82),
-            line=dict(color=_hex_rgba(color_hex, 1.0), width=1.2),
+            line=dict(width=0),          # no border — prevents seam artefacts
             mode="lines",
             name=_lbl,
             showlegend=_lbl not in _lbl_seen_cs,
@@ -1062,11 +1074,24 @@ def build_crosssection_figure(df: pd.DataFrame, selected: list[str], depth_limit
         ))
         _lbl_seen_cs.add(_lbl)
 
+    # Draw layer-interface lines on top as explicit separate traces so
+    # boundaries are still visible without double-border colour bleeding
+    for li in range(1, len(LAYER_SEQUENCE)):
+        curve = bdry_curves[li]
+        if np.all(np.abs(curve - bdry_curves[li - 1]) < 1e-6) and \
+           np.all(np.abs(curve - bdry_curves[li + 1]) < 1e-6):
+            continue   # flat (absent on both sides) — nothing to draw
+        fig.add_trace(go.Scatter(
+            x=list(x_dense), y=list(curve),
+            mode="lines",
+            line=dict(color="rgba(80,80,80,0.45)", width=0.8),
+            hoverinfo="skip", showlegend=False, name="_iface",
+        ))
+
     # ── Borehole sticks + labels + depth ticks ────────────────────────────────
     for bh in valid_sel:
         x_pos     = bh_x[bh]
-        stick_bot = min(bh_bots[bh][LAYER_SEQUENCE[-1]], depth_limit)
-        # Use the deepest bot across all layers present at this borehole
+        stick_bot = min(bh_bdry[bh][-1], depth_limit)
         if bh_data[bh]:
             stick_bot = min(max(b for _, b in bh_data[bh].values()), depth_limit)
         fig.add_shape(type="line", x0=x_pos, x1=x_pos, y0=0, y1=stick_bot,
