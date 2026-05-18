@@ -222,6 +222,34 @@ def _load_soil_props(file_bytes: bytes) -> dict:
         "Plastic Limit, PL":         "pl_pct",
         "Plasticity Index, PI":      "pi_pct",
     }
+    def _canon(header: str) -> str:
+        # Map a raw header to a canonical name. Exact match first, then
+        # substring heuristics so unit suffixes / wording variants still work
+        # (e.g. "Depth (m)", "Su (kPa)", "Total Unit Weight (kN/m3)").
+        h = str(header).strip()
+        if h in col_rename:
+            return col_rename[h]
+        low = h.lower()
+        if "soil" in low:
+            return "soil_type"
+        if "depth" in low:
+            return "depth_m"
+        if "unit weight" in low or "unit_weight" in low:
+            return "unit_weight"
+        if "spt" in low:
+            return "spt_n"
+        if "undrained" in low or low == "su" or low.startswith("su ") or low.startswith("su("):
+            return "su_kpa"
+        if "water content" in low or low == "wn":
+            return "wn_pct"
+        if "liquid limit" in low or low == "ll":
+            return "ll_pct"
+        if "plasticity" in low or low == "pi":
+            return "pi_pct"
+        if "plastic limit" in low or low == "pl":
+            return "pl_pct"
+        return h
+
     xl = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
     result = {}
     for sheet in xl.sheet_names:
@@ -229,8 +257,10 @@ def _load_soil_props(file_bytes: bytes) -> dict:
             io.BytesIO(file_bytes), sheet_name=sheet,
             header=None, engine="openpyxl",
         )
+        if raw.shape[0] < 3 or raw.shape[1] < 2:
+            continue
         raw_cols = raw.iloc[0, 1:].tolist()
-        new_cols = [col_rename.get(str(c).strip(), str(c)) for c in raw_cols]
+        new_cols = [_canon(c) for c in raw_cols]
         # Deduplicate: keep first occurrence of each column name
         seen = {}
         keep_idx = []
@@ -247,7 +277,12 @@ def _load_soil_props(file_bytes: bytes) -> dict:
         for col in final_cols:
             if col != "soil_type":
                 data[col] = pd.to_numeric(data[col], errors="coerce")
+        # Skip sheets that have no usable depth column instead of crashing
+        if "depth_m" not in data.columns:
+            continue
         data = data.dropna(subset=["depth_m"]).reset_index(drop=True)
+        if data.empty:
+            continue
         result[sheet] = data
     return result
 
