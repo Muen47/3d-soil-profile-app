@@ -1134,7 +1134,8 @@ _SS_DEFAULTS: dict = {
     "_max_display_depth": 80,
     "_cs_text_raw":     "",   # raw text in the borehole-selection text box
     "_cs_ordered_fp":   "",   # fingerprint of cs_ordered last reflected in the text box
-    "uploaded_props_data": None,   # dict[sheet_name -> DataFrame] from _load_soil_props()
+    "uploaded_props_data":    None,   # dict[sheet_name -> DataFrame] from _load_soil_props()
+    "_user_uploaded_xl_file": None,   # raw bytes of user's uploaded xlsx (None = using default)
 }
 for _k, _v in _SS_DEFAULTS.items():
     if _k not in st.session_state:
@@ -1202,7 +1203,9 @@ with st.sidebar:
         label_visibility="collapsed",
     )
     if _xl_upload is not None:
-        st.session_state.uploaded_props_data = _load_soil_props(_xl_upload.read())
+        _xl_bytes = _xl_upload.read()
+        st.session_state.uploaded_props_data   = _load_soil_props(_xl_bytes)
+        st.session_state._user_uploaded_xl_file = _xl_bytes  # raw bytes for zip packaging
     # Auto-load bundled template as default when nothing has been uploaded yet
     if st.session_state.uploaded_props_data is None:
         _default_xlsx = os.path.join(_ROOT, "Soil_Properties.xlsx")
@@ -1737,32 +1740,89 @@ with tab5:
 
     st.divider()
 
-    # ── Download validation script ────────────────────────────────────────────
+    # ── Download validation package ───────────────────────────────────────────
     st.subheader("Run the Validation Yourself")
     st.markdown(
-        "Download the standalone validation script below, then run it on your "
-        "machine or upload it to Google Colab. It will perform the full LOO-CV "
-        "and save a `validation_results.json` file that you can upload here to "
-        "display the results."
+        "Download the validation package below. It includes everything you need "
+        "to run the full LOO-CV locally or on Google Colab and produce a "
+        "`validation_results.json` file you can upload here."
     )
 
+    # Data-source status message
+    _user_uploaded_props = st.session_state.get("uploaded_props_data") is not None
+    _user_used_own_file  = st.session_state.get("_user_uploaded_xl_file") is not None
+    if _user_used_own_file:
+        st.success("✅ Using your uploaded data for the validation package.")
+    else:
+        st.warning(
+            "⚠️ You are using the default preset data. To validate against your "
+            "own data, upload your own file in the **Lab Data** section in the "
+            "sidebar first."
+        )
+
+    # Build the zip in memory
+    import zipfile as _zipfile
+    import io as _io
+
     _val_script_path = os.path.join(_ROOT, "validation.py")
-    if os.path.exists(_val_script_path):
-        with open(_val_script_path, "rb") as _vf:
-            st.download_button(
-                "📥 Download validation.py",
-                data=_vf.read(),
-                file_name="validation.py",
-                mime="text/x-python",
-                use_container_width=False,
+    _default_xl_path = os.path.join(_ROOT, "Soil_Properties.xlsx")
+
+    def _build_validation_zip() -> bytes:
+        buf = _io.BytesIO()
+        with _zipfile.ZipFile(buf, "w", _zipfile.ZIP_DEFLATED) as zf:
+            # validation.py
+            if os.path.exists(_val_script_path):
+                with open(_val_script_path, "rb") as f:
+                    zf.writestr("validation.py", f.read())
+
+            # Lab data — user upload takes priority over default
+            _xl_file = st.session_state.get("_user_uploaded_xl_file")
+            if _xl_file is not None:
+                zf.writestr("Soil_Properties.xlsx", _xl_file)
+            elif os.path.exists(_default_xl_path):
+                with open(_default_xl_path, "rb") as f:
+                    zf.writestr("Soil_Properties.xlsx", f.read())
+
+            # All .joblib model files
+            _models_dir = os.path.join(_ROOT, "models")
+            if os.path.isdir(_models_dir):
+                for _jf in sorted(os.listdir(_models_dir)):
+                    if _jf.endswith(".joblib"):
+                        with open(os.path.join(_models_dir, _jf), "rb") as f:
+                            zf.writestr(f"models/{_jf}", f.read())
+
+            # README
+            zf.writestr(
+                "README.txt",
+                "Soil Profile App — Validation Package\n"
+                "======================================\n\n"
+                "Requirements:\n"
+                "  pip install scikit-learn xgboost pandas numpy openpyxl\n\n"
+                "Steps:\n"
+                "  1. Run:   python validation.py\n"
+                "  2. Upload the output  validation_results.json  back to the\n"
+                "     app's 'Model Validation' tab to display your results.\n\n"
+                "Notes:\n"
+                "  - Soil_Properties.xlsx contains the lab data used for validation.\n"
+                "  - The models/ folder contains the pre-trained model files.\n"
+                "  - validation.py will look for data and models in these relative paths.\n",
             )
+        return buf.getvalue()
+
+    st.download_button(
+        "📥 Download Validation Package",
+        data=_build_validation_zip(),
+        file_name="validation_package.zip",
+        mime="application/zip",
+        use_container_width=False,
+    )
 
     st.info(
-        "💡 **Recommended:** Upload `validation.py` to "
+        "💡 **Recommended:** Upload the package to "
         "[Google Colab](https://colab.research.google.com) for a free cloud "
         "environment with all required packages pre-installed. Alternatively, "
-        "run it on your own machine if you have Python with scikit-learn and "
-        "XGBoost installed (`pip install scikit-learn xgboost pandas numpy`).",
+        "run it on your own machine if you have Python installed "
+        "(`pip install scikit-learn xgboost pandas numpy openpyxl`).",
         icon=None,
     )
 
