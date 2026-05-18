@@ -961,7 +961,7 @@ def _borehole_interfaces(layer_dict: dict, layer_sequence: list[str]) -> list[fl
 
 
 def build_crosssection_figure(df: pd.DataFrame, selected: list[str], depth_limit: float = 80.0) -> go.Figure:
-    bounds   = get_layer_bounds(df)
+    bounds   = get_layer_bounds(df)   # borehole_id, soil_layer, top, bot
     bpos_idx = bh_pos.set_index("borehole_id")
 
     valid_sel = [b for b in selected if b in bpos_idx.index]
@@ -974,6 +974,7 @@ def build_crosssection_figure(df: pd.DataFrame, selected: list[str], depth_limit
         )
         return fig
 
+    # ── Cumulative horizontal distance along the section line ─────────────────
     cum_dist = [0.0]
     for i in range(1, len(valid_sel)):
         b0, b1 = valid_sel[i - 1], valid_sel[i]
@@ -981,32 +982,77 @@ def build_crosssection_figure(df: pd.DataFrame, selected: list[str], depth_limit
         dn = float(bpos_idx.loc[b1, "northing"]) - float(bpos_idx.loc[b0, "northing"])
         cum_dist.append(cum_dist[-1] + np.sqrt(de**2 + dn**2))
     bh_x = {bh: cum_dist[i] for i, bh in enumerate(valid_sel)}
+    xs   = [bh_x[bh] for bh in valid_sel]
 
-    bh_layer = {}
+    # ── Layer boundary lookup: actual top/bot from data at each borehole ──────
+    # bh_data[bh][layer] = (top_m, bot_m)  or absent
+    bh_data: dict[str, dict[str, tuple[float, float]]] = {}
     for bh in valid_sel:
         sub = bounds[bounds["borehole_id"] == bh]
-        bh_layer[bh] = {r["soil_layer"]: (r["top"], r["bot"]) for _, r in sub.iterrows()}
+        bh_data[bh] = {
+            row["soil_layer"]: (float(row["top"]), float(row["bot"]))
+            for _, row in sub.iterrows()
+        }
 
-    ifaces    = {bh: _borehole_interfaces(bh_layer[bh], LAYER_SEQUENCE) for bh in valid_sel}
-    max_depth = max(max(v) for v in ifaces.values())
-    max_depth = min(max(max_depth * 1.05, 10.0), depth_limit)
+    # ── Pinch-out resolution ──────────────────────────────────────────────────
+    # For each borehole walk LAYER_SEQUENCE in order; if a layer is absent set
+    # top = bot = bottom of the deepest layer seen so far (zero thickness at
+    # that point).  This gives geologically correct wedge-out polygons.
+    bh_tops: dict[str, dict[str, float]] = {bh: {} for bh in valid_sel}
+    bh_bots: dict[str, dict[str, float]] = {bh: {} for bh in valid_sel}
+
+    for bh in valid_sel:
+        last_bot = 0.0
+        for layer in LAYER_SEQUENCE:
+            if layer in bh_data[bh]:
+                t, b      = bh_data[bh][layer]
+                last_bot  = b
+            else:
+                t = b = last_bot          # pinch-out: zero thickness
+            bh_tops[bh][layer] = t
+            bh_bots[bh][layer] = b
+
+    # ── Axis limits ───────────────────────────────────────────────────────────
+    all_bots  = [bh_bots[bh][layer] for bh in valid_sel for layer in LAYER_SEQUENCE]
+    max_depth = min(max(all_bots) * 1.05 if all_bots else 10.0, depth_limit)
+    max_depth = max(max_depth, 10.0)
 
     fig = go.Figure()
-    xs  = [bh_x[bh] for bh in valid_sel]
 
-    # Filled layer bands
+    # ── Filled layer-boundary polygons ────────────────────────────────────────
+    # For each layer interpolate top and bottom boundaries linearly between
+    # boreholes.  The polygon path is:
+    #   left → right along interpolated top boundary
+    #   right → left along interpolated bottom boundary
+    # Plotly fill="toself" closes and fills the shape.
     _lbl_seen_cs: set[str] = set()
-    for li, layer in enumerate(LAYER_SEQUENCE):
-        tops = [min(ifaces[bh][li],     depth_limit) for bh in valid_sel]
-        bots = [min(ifaces[bh][li + 1], depth_limit) for bh in valid_sel]
-        if all(abs(t - b) < 1e-6 for t, b in zip(tops, bots)):
+
+    # Dense x-grid for smooth interpolated boundary lines (20 pts per segment)
+    n_pts = max(2, (len(valid_sel) - 1) * 20 + 1)
+    x_dense = np.linspace(0, cum_dist[-1], n_pts)
+
+    for layer in LAYER_SEQUENCE:
+        # Raw top / bot at each borehole x position (clamped to depth_limit)
+        raw_tops = [min(bh_tops[bh][layer], depth_limit) for bh in valid_sel]
+        raw_bots = [min(bh_bots[bh][layer], depth_limit) for bh in valid_sel]
+
+        # Skip if zero thickness everywhere
+        if all(abs(t - b) < 1e-6 for t, b in zip(raw_tops, raw_bots)):
             continue
+
+        # Linear interpolation of boundary curves onto the dense x-grid
+        top_dense = np.interp(x_dense, xs, raw_tops)
+        bot_dense = np.interp(x_dense, xs, raw_bots)
+
+        # Build closed polygon
+        poly_x = list(x_dense) + list(x_dense[::-1]) + [x_dense[0]]
+        poly_y = list(top_dense) + list(bot_dense[::-1]) + [top_dense[0]]
+
         color_hex = LAYER_COLORS.get(layer, "#aaaaaa")
-        poly_x = xs + list(reversed(xs)) + [xs[0]]
-        poly_y = tops + list(reversed(bots)) + [tops[0]]
         _lbl = LAYER_LABELS.get(layer, layer)
         fig.add_trace(go.Scatter(
-            x=poly_x, y=poly_y, fill="toself",
+            x=poly_x, y=poly_y,
+            fill="toself",
             fillcolor=_hex_rgba(color_hex, 0.82),
             line=dict(color=_hex_rgba(color_hex, 1.0), width=1.2),
             mode="lines",
@@ -1016,11 +1062,13 @@ def build_crosssection_figure(df: pd.DataFrame, selected: list[str], depth_limit
         ))
         _lbl_seen_cs.add(_lbl)
 
-    # Borehole sticks + labels + depth ticks
+    # ── Borehole sticks + labels + depth ticks ────────────────────────────────
     for bh in valid_sel:
-        x_pos   = bh_x[bh]
-        col_bot = ifaces[bh][-1]
-        stick_bot = min(col_bot, depth_limit)
+        x_pos     = bh_x[bh]
+        stick_bot = min(bh_bots[bh][LAYER_SEQUENCE[-1]], depth_limit)
+        # Use the deepest bot across all layers present at this borehole
+        if bh_data[bh]:
+            stick_bot = min(max(b for _, b in bh_data[bh].values()), depth_limit)
         fig.add_shape(type="line", x0=x_pos, x1=x_pos, y0=0, y1=stick_bot,
                       line=dict(color="#111111", width=1.8), layer="above")
         fig.add_annotation(x=x_pos, y=0, text=f"<b>{bh}</b>",
@@ -1032,7 +1080,7 @@ def build_crosssection_figure(df: pd.DataFrame, selected: list[str], depth_limit
                                showarrow=False, xshift=7,
                                font=dict(size=7, color="#444"))
 
-    # Distance labels between adjacent boreholes
+    # ── Distance labels between adjacent boreholes ────────────────────────────
     for i in range(1, len(valid_sel)):
         b0, b1 = valid_sel[i - 1], valid_sel[i]
         fig.add_annotation(
@@ -1042,7 +1090,7 @@ def build_crosssection_figure(df: pd.DataFrame, selected: list[str], depth_limit
             bgcolor="rgba(255,255,255,0.7)",
         )
 
-    # Invisible ghost grid — click target for depth/coord picking (Feature 2)
+    # ── Invisible ghost grid — click target for depth/coord picking ───────────
     ghost_xs = np.linspace(0, cum_dist[-1], 50)
     ghost_ys = np.linspace(0, max_depth, 35)
     GX, GY   = np.meshgrid(ghost_xs, ghost_ys)
