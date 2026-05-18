@@ -1643,13 +1643,15 @@ with tab4:
     st.markdown("#### Distribution of Total Unit Weight by Soil Stratum")
     st.image(
         os.path.join(_ROOT, "assets", "Distribution - Unit weight.jpg"),
-        use_column_width=True,
+        use_column_width=False,
+        width=700,
     )
 
     st.markdown("#### Water Content vs Depth")
     st.image(
         os.path.join(_ROOT, "assets", "Water Content - Depth.jpg"),
-        use_column_width=True,
+        use_column_width=False,
+        width=700,
     )
 
 
