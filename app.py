@@ -1036,15 +1036,35 @@ def build_crosssection_figure(df: pd.DataFrame, selected: list[str], depth_limit
     max_depth = min(max(bh_bdry[bh][-1] for bh in valid_sel) * 1.05, depth_limit)
     max_depth = max(max_depth, 10.0)
 
-    # Dense x-grid (20 pts per segment) for smooth interpolated band edges
-    n_pts   = max(2, (len(valid_sel) - 1) * 20 + 1)
+    # Dense x-grid — 200 pts per segment for professional smooth curves
+    n_pts   = max(2, (len(valid_sel) - 1) * 200 + 1)
     x_dense = np.linspace(0, cum_dist[-1], n_pts)
 
-    # Pre-interpolate all N+1 boundary curves onto the dense grid
+    # Pre-interpolate all N+1 boundary curves with PCHIP monotone spline.
+    # PCHIP (Piecewise Cubic Hermite Interpolating Polynomial) is preferred
+    # over CubicSpline because it never overshoots/oscillates between nodes,
+    # which keeps boundary curves well-behaved and gap-free.
+    from scipy.interpolate import PchipInterpolator
+
     bdry_curves: list[np.ndarray] = []
     for bi in range(len(LAYER_SEQUENCE) + 1):
         vals = [min(bh_bdry[bh][bi], depth_limit) for bh in valid_sel]
-        bdry_curves.append(np.interp(x_dense, xs, vals))
+        # Cap MG bottom boundary (index 1 = bottom of first layer = MG) at 5 m
+        if bi == 1:
+            vals = [min(v, 5.0) for v in vals]
+        if len(xs) >= 2:
+            curve = PchipInterpolator(xs, vals)(x_dense)
+            curve = np.clip(curve, 0.0, depth_limit)   # hard clamp to valid range
+        else:
+            curve = np.full(len(x_dense), vals[0])
+        bdry_curves.append(curve)
+
+    # Enforce strictly non-decreasing depth order across all boundaries.
+    # PCHIP can produce tiny undershoots (~1e-10) near pinch-out zones where
+    # adjacent boundary values are equal.  This clamp collapses them to zero
+    # thickness without creating any visible gap.
+    for bi in range(1, len(bdry_curves)):
+        bdry_curves[bi] = np.maximum(bdry_curves[bi], bdry_curves[bi - 1])
 
     fig = go.Figure()
 
