@@ -1644,14 +1644,14 @@ with tab4:
     st.image(
         os.path.join(_ROOT, "assets", "Distribution - Unit weight.jpg"),
         use_column_width=False,
-        width=700,
+        width=500,
     )
 
     st.markdown("#### Water Content vs Depth")
     st.image(
         os.path.join(_ROOT, "assets", "Water Content - Depth.jpg"),
         use_column_width=False,
-        width=700,
+        width=500,
     )
 
 
