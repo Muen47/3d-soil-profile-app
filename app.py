@@ -1136,6 +1136,7 @@ _SS_DEFAULTS: dict = {
     "_cs_ordered_fp":   "",   # fingerprint of cs_ordered last reflected in the text box
     "uploaded_props_data":    None,   # dict[sheet_name -> DataFrame] from _load_soil_props()
     "_user_uploaded_xl_file": None,   # raw bytes of user's uploaded xlsx (None = using default)
+    "_user_uploaded_json":    None,   # raw text of user's uploaded validation_results.json
 }
 for _k, _v in _SS_DEFAULTS.items():
     if _k not in st.session_state:
@@ -1828,116 +1829,120 @@ with tab5:
 
     st.divider()
 
-    # ── Upload & display results ──────────────────────────────────────────────
+    # ── View validation results ───────────────────────────────────────────────
     st.subheader("View Validation Results")
-    st.caption(
-        "After running validation.py, upload the generated "
-        "`validation_results.json` file here to see the results."
-    )
 
-    _val_upload = st.file_uploader(
-        "Upload validation_results.json",
-        type=["json"],
-        label_visibility="collapsed",
-        help="JSON file produced by validation.py",
-    )
+    import json as _json
 
-    if _val_upload is not None:
-        import json as _json
+    _default_results_path = os.path.join(_ROOT, "validation_results.json")
 
-        try:
-            _vres = _json.loads(_val_upload.read())
+    def _render_validation_results(vres: dict, is_default: bool):
+        if is_default:
+            st.caption("Showing default Bangkok MRT dataset results.")
 
-            # ── Classification table ──────────────────────────────────────────
-            st.markdown("#### Soil Layer Classification Accuracy")
-            _cls = _vres.get("classification", {})
-            _cls_rows = []
-            for _m, _label in [("dwa", "Distance-Weighted Average"),
-                                ("rf",  "Random Forest"),
-                                ("xgb", "XGBoost")]:
-                _acc = _cls.get(_m, {}).get("accuracy")
-                if _acc is not None:
-                    _cls_rows.append({
-                        "Method":       _label,
-                        "Accuracy (%)": round(_acc * 100, 1),
+        # ── Classification ────────────────────────────────────────────────────
+        st.markdown("#### Soil Layer Classification Accuracy")
+        _cls = vres.get("classification", {})
+        _cls_rows = []
+        for _m, _mlabel in [("dwa", "Distance-Weighted Average"),
+                             ("rf",  "Random Forest"),
+                             ("xgb", "XGBoost")]:
+            _acc = _cls.get(_m, {}).get("accuracy")
+            if _acc is not None:
+                _cls_rows.append({
+                    "Method":       _mlabel,
+                    "Accuracy (%)": round(_acc * 100, 1),
+                })
+        if _cls_rows:
+            _cls_df = pd.DataFrame(_cls_rows).set_index("Method")
+            st.dataframe(_cls_df, use_container_width=True)
+            _cls_fig = go.Figure(go.Bar(
+                x=_cls_df.index,
+                y=_cls_df["Accuracy (%)"],
+                marker_color=["#78909C", "#1565C0", "#F9A825"],
+                text=[f"{v:.1f}%" for v in _cls_df["Accuracy (%)"]],
+                textposition="outside",
+            ))
+            _cls_fig.update_layout(
+                title="Soil Layer Classification Accuracy (%)",
+                yaxis=dict(title="Accuracy (%)", range=[0, 105]),
+                height=340,
+                margin=dict(t=50, b=30, l=40, r=20),
+                plot_bgcolor="white",
+            )
+            st.plotly_chart(_cls_fig, use_container_width=True,
+                            config={"displaylogo": False})
+
+        # ── Regression ────────────────────────────────────────────────────────
+        _reg_targets = [
+            ("su_kpa",  "Undrained Shear Strength (Su)", "kPa"),
+            ("spt_n",   "SPT-N",                         "blows/0.3 m"),
+        ]
+        _reg = vres.get("regression", {})
+        for _col, _rlabel, _unit in _reg_targets:
+            st.markdown(f"#### {_rlabel}")
+            _prop = _reg.get(_col, {})
+            _reg_rows = []
+            for _m, _mlabel in [("dwa", "Distance-Weighted Average"),
+                                 ("rf",  "Random Forest"),
+                                 ("xgb", "XGBoost")]:
+                _d = _prop.get(_m, {})
+                if _d:
+                    _reg_rows.append({
+                        "Method":          _mlabel,
+                        f"RMSE ({_unit})": round(_d.get("rmse", float("nan")), 3),
+                        f"MAE ({_unit})":  round(_d.get("mae",  float("nan")), 3),
+                        "N samples":       _d.get("n", "—"),
                     })
-            if _cls_rows:
-                _cls_df = pd.DataFrame(_cls_rows).set_index("Method")
-                st.dataframe(_cls_df, use_container_width=True)
-                _cls_fig = go.Figure(go.Bar(
-                    x=_cls_df.index,
-                    y=_cls_df["Accuracy (%)"],
-                    marker_color=["#78909C", "#1565C0", "#F9A825"],
-                    text=[f"{v:.1f}%" for v in _cls_df["Accuracy (%)"]],
+            if _reg_rows:
+                _reg_df = pd.DataFrame(_reg_rows).set_index("Method")
+                st.dataframe(_reg_df, use_container_width=True)
+                _methods_r   = [r["Method"]          for r in _reg_rows]
+                _rmse_vals_r = [r[f"RMSE ({_unit})"] for r in _reg_rows]
+                _mae_vals_r  = [r[f"MAE ({_unit})"]  for r in _reg_rows]
+                _reg_fig = go.Figure()
+                _reg_fig.add_trace(go.Bar(
+                    name="RMSE", x=_methods_r, y=_rmse_vals_r,
+                    marker_color="#1565C0",
+                    text=[f"{v:.3f}" for v in _rmse_vals_r],
                     textposition="outside",
                 ))
-                _cls_fig.update_layout(
-                    title="Soil Layer Classification Accuracy (%)",
-                    yaxis=dict(title="Accuracy (%)", range=[0, 105]),
+                _reg_fig.add_trace(go.Bar(
+                    name="MAE", x=_methods_r, y=_mae_vals_r,
+                    marker_color="#4FC3F7",
+                    text=[f"{v:.3f}" for v in _mae_vals_r],
+                    textposition="outside",
+                ))
+                _reg_fig.update_layout(
+                    title=f"{_rlabel} — RMSE & MAE ({_unit})",
+                    yaxis_title=_unit,
+                    barmode="group",
                     height=340,
                     margin=dict(t=50, b=30, l=40, r=20),
                     plot_bgcolor="white",
+                    legend=dict(orientation="h", y=1.12),
                 )
-                st.plotly_chart(_cls_fig, use_container_width=True,
+                st.plotly_chart(_reg_fig, use_container_width=True,
                                 config={"displaylogo": False})
 
-            # ── Regression tables + charts ────────────────────────────────────
-            _reg_targets = {
-                "unit_weight": ("Unit Weight", "kN/m³"),
-                "su_kpa":      ("Undrained Shear Strength (Su)", "kPa"),
-                "spt_n":       ("SPT-N", "blows/0.3 m"),
-            }
-            _reg = _vres.get("regression", {})
+    if st.button("🔍 View Validation Results", use_container_width=False):
+        try:
+            _uploaded_json = st.session_state.get("_user_uploaded_json")
+            if _uploaded_json is not None:
+                _vres      = _json.loads(_uploaded_json)
+                _is_default = False
+            elif os.path.exists(_default_results_path):
+                with open(_default_results_path, "r") as _f:
+                    _vres = _json.load(_f)
+                _is_default = True
+            else:
+                st.error("No validation results found. Run validation.py and upload the output JSON.")
+                _vres = None
 
-            for _col, (_label, _unit) in _reg_targets.items():
-                st.markdown(f"#### {_label}")
-                _prop = _reg.get(_col, {})
-                _reg_rows = []
-                for _m, _mlabel in [("dwa", "Distance-Weighted Average"),
-                                     ("rf",  "Random Forest"),
-                                     ("xgb", "XGBoost")]:
-                    _d = _prop.get(_m, {})
-                    if _d:
-                        _reg_rows.append({
-                            "Method": _mlabel,
-                            f"RMSE ({_unit})": round(_d.get("rmse", float("nan")), 3),
-                            f"MAE ({_unit})":  round(_d.get("mae",  float("nan")), 3),
-                            "N samples":       _d.get("n", "—"),
-                        })
-                if _reg_rows:
-                    _reg_df = pd.DataFrame(_reg_rows).set_index("Method")
-                    st.dataframe(_reg_df, use_container_width=True)
-
-                    _methods  = [r["Method"] for r in _reg_rows]
-                    _rmse_vals = [r[f"RMSE ({_unit})"] for r in _reg_rows]
-                    _mae_vals  = [r[f"MAE ({_unit})"]  for r in _reg_rows]
-                    _reg_fig = go.Figure()
-                    _reg_fig.add_trace(go.Bar(
-                        name="RMSE", x=_methods, y=_rmse_vals,
-                        marker_color="#1565C0",
-                        text=[f"{v:.3f}" for v in _rmse_vals],
-                        textposition="outside",
-                    ))
-                    _reg_fig.add_trace(go.Bar(
-                        name="MAE",  x=_methods, y=_mae_vals,
-                        marker_color="#4FC3F7",
-                        text=[f"{v:.3f}" for v in _mae_vals],
-                        textposition="outside",
-                    ))
-                    _reg_fig.update_layout(
-                        title=f"{_label} — RMSE & MAE ({_unit})",
-                        yaxis_title=_unit,
-                        barmode="group",
-                        height=340,
-                        margin=dict(t=50, b=30, l=40, r=20),
-                        plot_bgcolor="white",
-                        legend=dict(orientation="h", y=1.12),
-                    )
-                    st.plotly_chart(_reg_fig, use_container_width=True,
-                                    config={"displaylogo": False})
-
+            if _vres is not None:
+                _render_validation_results(_vres, _is_default)
         except Exception as _e:
-            st.error(f"Could not parse results file: {_e}")
+            st.error(f"Could not load results: {_e}")
 
 
 # ══ Permanent results panel (always visible below all tabs) ══════════════════
