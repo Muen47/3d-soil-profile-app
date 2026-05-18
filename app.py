@@ -1325,11 +1325,12 @@ st.markdown(
 )
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "3D Borehole View",
     "3D Solid Model",
     "2D Cross-Section",
     "Dataset Overview",
+    "Model Validation",
 ])
 
 
@@ -1703,6 +1704,180 @@ with tab4:
         ("Soil profile 1.png", "Soil Profile 1"),
         ("Soil profile 2.png", "Soil Profile 2"),
     ])
+
+
+with tab5:
+    # ── What is LOOCV? ────────────────────────────────────────────────────────
+    st.subheader("What is Leave-One-Out Cross-Validation?")
+    st.markdown(
+        """
+        **Leave-One-Out Cross-Validation (LOOCV) by borehole** is a way to test
+        how well the prediction models generalise to locations they have never seen.
+
+        The idea is simple:
+
+        1. Pick one borehole and **hide it completely** from the models.
+        2. Train (or parameterise) each method using **all the other boreholes**.
+        3. Ask each method to predict the soil layer and properties at the hidden
+           borehole's locations.
+        4. Compare those predictions with the **real measurements** from the hidden
+           borehole to compute errors.
+        5. Repeat for every borehole in the dataset and average the results.
+
+        This gives an honest estimate of how accurate the app would be at a
+        **brand-new borehole location** — the most realistic test for practical use.
+
+        **Metrics reported**
+        - *Soil Layer Classification* → **Accuracy** (% of depth intervals
+          where the predicted soil layer matches the recorded one)
+        - *Unit Weight, Su, SPT-N* → **RMSE** (Root Mean Squared Error) and
+          **MAE** (Mean Absolute Error) in the original units
+        """
+    )
+
+    st.divider()
+
+    # ── Download validation script ────────────────────────────────────────────
+    st.subheader("Run the Validation Yourself")
+    st.markdown(
+        "Download the standalone validation script below, then run it on your "
+        "machine or upload it to Google Colab. It will perform the full LOO-CV "
+        "and save a `validation_results.json` file that you can upload here to "
+        "display the results."
+    )
+
+    _val_script_path = os.path.join(_ROOT, "validation.py")
+    if os.path.exists(_val_script_path):
+        with open(_val_script_path, "rb") as _vf:
+            st.download_button(
+                "📥 Download validation.py",
+                data=_vf.read(),
+                file_name="validation.py",
+                mime="text/x-python",
+                use_container_width=False,
+            )
+
+    st.info(
+        "💡 **Recommended:** Upload `validation.py` to "
+        "[Google Colab](https://colab.research.google.com) for a free cloud "
+        "environment with all required packages pre-installed. Alternatively, "
+        "run it on your own machine if you have Python with scikit-learn and "
+        "XGBoost installed (`pip install scikit-learn xgboost pandas numpy`).",
+        icon=None,
+    )
+
+    st.divider()
+
+    # ── Upload & display results ──────────────────────────────────────────────
+    st.subheader("View Validation Results")
+    st.caption(
+        "After running validation.py, upload the generated "
+        "`validation_results.json` file here to see the results."
+    )
+
+    _val_upload = st.file_uploader(
+        "Upload validation_results.json",
+        type=["json"],
+        label_visibility="collapsed",
+        help="JSON file produced by validation.py",
+    )
+
+    if _val_upload is not None:
+        import json as _json
+
+        try:
+            _vres = _json.loads(_val_upload.read())
+
+            # ── Classification table ──────────────────────────────────────────
+            st.markdown("#### Soil Layer Classification Accuracy")
+            _cls = _vres.get("classification", {})
+            _cls_rows = []
+            for _m, _label in [("dwa", "Distance-Weighted Average"),
+                                ("rf",  "Random Forest"),
+                                ("xgb", "XGBoost")]:
+                _acc = _cls.get(_m, {}).get("accuracy")
+                if _acc is not None:
+                    _cls_rows.append({
+                        "Method":       _label,
+                        "Accuracy (%)": round(_acc * 100, 1),
+                    })
+            if _cls_rows:
+                _cls_df = pd.DataFrame(_cls_rows).set_index("Method")
+                st.dataframe(_cls_df, use_container_width=True)
+                _cls_fig = go.Figure(go.Bar(
+                    x=_cls_df.index,
+                    y=_cls_df["Accuracy (%)"],
+                    marker_color=["#78909C", "#1565C0", "#F9A825"],
+                    text=[f"{v:.1f}%" for v in _cls_df["Accuracy (%)"]],
+                    textposition="outside",
+                ))
+                _cls_fig.update_layout(
+                    title="Soil Layer Classification Accuracy (%)",
+                    yaxis=dict(title="Accuracy (%)", range=[0, 105]),
+                    height=340,
+                    margin=dict(t=50, b=30, l=40, r=20),
+                    plot_bgcolor="white",
+                )
+                st.plotly_chart(_cls_fig, use_container_width=True,
+                                config={"displaylogo": False})
+
+            # ── Regression tables + charts ────────────────────────────────────
+            _reg_targets = {
+                "unit_weight": ("Unit Weight", "kN/m³"),
+                "su_kpa":      ("Undrained Shear Strength (Su)", "kPa"),
+                "spt_n":       ("SPT-N", "blows/0.3 m"),
+            }
+            _reg = _vres.get("regression", {})
+
+            for _col, (_label, _unit) in _reg_targets.items():
+                st.markdown(f"#### {_label}")
+                _prop = _reg.get(_col, {})
+                _reg_rows = []
+                for _m, _mlabel in [("dwa", "Distance-Weighted Average"),
+                                     ("rf",  "Random Forest"),
+                                     ("xgb", "XGBoost")]:
+                    _d = _prop.get(_m, {})
+                    if _d:
+                        _reg_rows.append({
+                            "Method": _mlabel,
+                            f"RMSE ({_unit})": round(_d.get("rmse", float("nan")), 3),
+                            f"MAE ({_unit})":  round(_d.get("mae",  float("nan")), 3),
+                            "N samples":       _d.get("n", "—"),
+                        })
+                if _reg_rows:
+                    _reg_df = pd.DataFrame(_reg_rows).set_index("Method")
+                    st.dataframe(_reg_df, use_container_width=True)
+
+                    _methods  = [r["Method"] for r in _reg_rows]
+                    _rmse_vals = [r[f"RMSE ({_unit})"] for r in _reg_rows]
+                    _mae_vals  = [r[f"MAE ({_unit})"]  for r in _reg_rows]
+                    _reg_fig = go.Figure()
+                    _reg_fig.add_trace(go.Bar(
+                        name="RMSE", x=_methods, y=_rmse_vals,
+                        marker_color="#1565C0",
+                        text=[f"{v:.3f}" for v in _rmse_vals],
+                        textposition="outside",
+                    ))
+                    _reg_fig.add_trace(go.Bar(
+                        name="MAE",  x=_methods, y=_mae_vals,
+                        marker_color="#4FC3F7",
+                        text=[f"{v:.3f}" for v in _mae_vals],
+                        textposition="outside",
+                    ))
+                    _reg_fig.update_layout(
+                        title=f"{_label} — RMSE & MAE ({_unit})",
+                        yaxis_title=_unit,
+                        barmode="group",
+                        height=340,
+                        margin=dict(t=50, b=30, l=40, r=20),
+                        plot_bgcolor="white",
+                        legend=dict(orientation="h", y=1.12),
+                    )
+                    st.plotly_chart(_reg_fig, use_container_width=True,
+                                    config={"displaylogo": False})
+
+        except Exception as _e:
+            st.error(f"Could not parse results file: {_e}")
 
 
 # ══ Permanent results panel (always visible below all tabs) ══════════════════
