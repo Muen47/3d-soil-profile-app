@@ -1855,9 +1855,7 @@ with tab5:
                 })
         if _cls_rows:
             _cls_df = pd.DataFrame(_cls_rows).set_index("Method")
-            _cls_display = _cls_df.copy()
-            _cls_display["Accuracy (%)"] = _cls_display["Accuracy (%)"].map(lambda v: f"{v:.1f}%")
-            st.table(_cls_display)
+            st.dataframe(_cls_df, use_container_width=True)
             _cls_fig = go.Figure(go.Bar(
                 x=_cls_df.index,
                 y=_cls_df["Accuracy (%)"],
@@ -1898,7 +1896,7 @@ with tab5:
                     })
             if _reg_rows:
                 _reg_df = pd.DataFrame(_reg_rows).set_index("Method")
-                st.table(_reg_df)
+                st.dataframe(_reg_df, use_container_width=True)
                 _methods_r   = [r["Method"]          for r in _reg_rows]
                 _rmse_vals_r = [r[f"RMSE ({_unit})"] for r in _reg_rows]
                 _mae_vals_r  = [r[f"MAE ({_unit})"]  for r in _reg_rows]
@@ -1919,10 +1917,10 @@ with tab5:
                     title=f"{_rlabel} — RMSE & MAE ({_unit})",
                     yaxis_title=_unit,
                     barmode="group",
-                    height=400,
-                    margin=dict(t=70, b=30, l=40, r=20),
+                    height=340,
+                    margin=dict(t=50, b=30, l=40, r=20),
                     plot_bgcolor="white",
-                    legend=dict(orientation="h", yanchor="top", y=1.15, xanchor="left", x=0),
+                    legend=dict(orientation="h", y=1.12),
                 )
                 st.plotly_chart(_reg_fig, use_container_width=True,
                                 config={"displaylogo": False})
