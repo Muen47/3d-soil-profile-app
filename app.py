@@ -76,6 +76,17 @@ METHOD_MAP = {
     "XGBoost":                   "xgb",
 }
 
+# Merged display options for the Step 2 confirmation dropdown.
+# Maps human-readable label → primary layer code used for depth-only prediction.
+_LAYER_DROPDOWN: list[tuple[str, str]] = [
+    ("Made Ground / Fill", "MG"),
+    ("Soft Clay",          "VSC"),
+    ("Medium Stiff Clay",  "SC"),
+    ("Stiff Clay",         "MSC"),
+    ("Sand",               "SS"),
+]
+_DISP_TO_CODE: dict[str, str] = {d: c for d, c in _LAYER_DROPDOWN}
+
 # ── UTM Zone 47N ↔ WGS84 helpers ─────────────────────────────────────────────
 _WGS84_A    = 6_378_137.0
 _WGS84_F    = 1 / 298.257223563
@@ -189,6 +200,35 @@ if not st.session_state.get("authenticated"):
 @st.cache_resource(show_spinner="Loading models...")
 def _get_predictor():
     return SoilPredictor(model_dir=MODEL_DIR, data_path=DATA_PATH)
+
+
+@st.cache_resource(show_spinner=False)
+def _get_depth_models() -> dict:
+    """Load Stage-2 depth-only RF regressors (su_kpa, spt_n)."""
+    import joblib as _jl
+    out = {}
+    for col in ("su_kpa", "spt_n"):
+        p = os.path.join(MODEL_DIR, f"stage2_depth_rf_{col}.joblib")
+        if os.path.exists(p):
+            out[col] = _jl.load(p)
+    return out
+
+
+# Feature order must match training (see pipeline/predict.py ALL_LAYERS)
+_DEPTH_ALL_LAYERS = ["MG", "SOC", "MSC", "SC", "FS", "VSC", "SS"]
+
+
+def _predict_from_layer_depth(layer_code: str, depth_m: float) -> dict:
+    """Predict su_kpa / spt_n from (depth_m + soil_layer one-hot) only."""
+    x = np.array([[depth_m] + [int(layer_code == l) for l in _DEPTH_ALL_LAYERS]])
+    models = _get_depth_models()
+    result: dict = {}
+    for col, model in models.items():
+        val = float(max(0.0, model.predict(x)[0]))
+        tree_preds = np.array([t.predict(x)[0] for t in model.estimators_])
+        result[col]            = val
+        result[f"{col}_std"]   = float(tree_preds.std())
+    return result
 
 
 @st.cache_data(show_spinner=False)
@@ -1263,7 +1303,8 @@ with st.sidebar:
     )
     st.divider()
 
-    st.markdown("#### Query Point")
+    # ── Step 1: Site Location & Depth ─────────────────────────────────────────
+    st.markdown("#### Step 1: Site Location & Depth")
     # No key= on these widgets — value= is set from the internal _query_* state.
     # Returning the widget value and writing it back to the internal key lets
     # programmatic updates (map clicks) set _query_* without triggering the
@@ -1280,16 +1321,67 @@ with st.sidebar:
                          value=float(st.session_state._query_depth))
     st.session_state._query_depth = _d
 
-    st.divider()
-    st.markdown("#### Prediction Method")
-    method_label = st.radio(
-        "method", list(METHOD_MAP.keys()), index=1, label_visibility="collapsed"
+    # Auto-infer layer via Stage 1 RF classifier (Stage 1 only — fast)
+    _clf = predictor._m.get("stage1_rf_classifier")
+    _enc = predictor._m.get("label_encoder")
+    if _clf is not None and _enc is not None:
+        _x1 = np.array([[_e, _n, _d]])
+        _proba = _clf.predict_proba(_x1)[0]
+        _idx = int(_proba.argmax())
+        _inferred_code = _enc.inverse_transform([_idx])[0]
+        _inferred_conf = float(_proba[_idx])
+    else:
+        _inferred_code, _inferred_conf = "VSC", 0.5
+
+    _inferred_disp = LAYER_LABELS.get(_inferred_code, _inferred_code)
+    st.markdown(
+        f"<div style='background:#E3F2FD;border-left:4px solid #1565C0;"
+        f"padding:8px 12px;border-radius:4px;margin:8px 0 4px;font-size:.88rem;'>"
+        f"🧭 <b>Spatially inferred layer:</b> {_inferred_disp}<br>"
+        f"<span style='color:#555;'>Confidence: {_inferred_conf * 100:.0f}%</span>"
+        f"</div>",
+        unsafe_allow_html=True,
     )
-    method = METHOD_MAP[method_label]
-    if method == "xgb":
-        st.caption("XGBoost does not provide per-prediction uncertainty estimates.")
 
     st.divider()
+
+    # ── Step 2: Soil Layer Confirmation ───────────────────────────────────────
+    st.markdown("#### Step 2: Soil Layer Confirmation")
+    _disp_names = [d for d, _ in _LAYER_DROPDOWN]
+    _default_idx = next(
+        (i for i, (d, _) in enumerate(_LAYER_DROPDOWN) if d == _inferred_disp), 0
+    )
+    _confirmed_disp = st.selectbox(
+        "Confirmed soil layer",
+        options=_disp_names,
+        index=_default_idx,
+        label_visibility="collapsed",
+    )
+    _confirmed_code = _DISP_TO_CODE[_confirmed_disp]
+
+    if _confirmed_disp != _inferred_disp:
+        st.info("ℹ️ User-defined layer selected. Spatial inference overridden.")
+
+    st.divider()
+
+    # ── Run Prediction ─────────────────────────────────────────────────────────
+    run = st.button("Run Prediction", type="primary", use_container_width=True)
+
+    with st.expander("Methodology"):
+        st.markdown(
+            "The prediction follows a two-stage pipeline. Stage 1 applies a "
+            "spatially-trained classifier (Random Forest / XGBoost) using UTM "
+            "coordinates and depth to infer the most probable soil stratum at "
+            "the query location, based on 41 boreholes from the MRT Orange Line "
+            "dataset. Stage 2 estimates geotechnical properties (Su, SPT-N) "
+            "using a regression model conditioned on the confirmed soil layer and "
+            "depth, derived from statistical patterns in the borehole dataset. "
+            "Users may override the inferred stratum with site-specific knowledge."
+        )
+
+    st.divider()
+
+    # ── Display Settings ───────────────────────────────────────────────────────
     st.markdown("#### Display Settings")
     st.number_input(
         "Max Display Depth (m)",
@@ -1300,11 +1392,7 @@ with st.sidebar:
         help="Hides data deeper than this value and clamps the Z / Y axis on all views.",
     )
 
-    st.divider()
-    run        = st.button("Run Prediction",           type="primary", use_container_width=True)
-    run_column = st.button("Predict New Borehole Here", use_container_width=True)
-
-    # ── Change 4: Lab data uploader ───────────────────────────────────────────
+    # ── Lab Data ──────────────────────────────────────────────────────────────
     st.divider()
     st.subheader("Lab Data (optional)", help="The default data shown is a preset provided by the developers. To use your own data, download the template below, fill in your measurements, and upload it here.")
     _xl_upload = st.file_uploader(
@@ -1316,8 +1404,7 @@ with st.sidebar:
     if _xl_upload is not None:
         _xl_bytes = _xl_upload.read()
         st.session_state.uploaded_props_data   = _load_soil_props(_xl_bytes)
-        st.session_state._user_uploaded_xl_file = _xl_bytes  # raw bytes for zip packaging
-    # Auto-load bundled template as default when nothing has been uploaded yet
+        st.session_state._user_uploaded_xl_file = _xl_bytes
     if st.session_state.uploaded_props_data is None:
         _default_xlsx = os.path.join(_ROOT, "Soil_Properties.xlsx")
         if os.path.exists(_default_xlsx):
@@ -1325,7 +1412,6 @@ with st.sidebar:
                 st.session_state.uploaded_props_data = _load_soil_props(_f.read())
     if st.session_state.uploaded_props_data is not None:
         st.caption("✅ Lab data loaded")
-    # Download button for the data template
     _template_path = os.path.join(_ROOT, "Soil_Properties.xlsx")
     if os.path.exists(_template_path):
         with open(_template_path, "rb") as _f:
@@ -1336,6 +1422,20 @@ with st.sidebar:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
             )
+
+    # ── Virtual Borehole (advanced) ───────────────────────────────────────────
+    st.divider()
+    with st.expander("⚙ Virtual Borehole"):
+        st.caption("Predict a full soil column at the current query point.")
+        method_label = st.radio(
+            "Inference method",
+            list(METHOD_MAP.keys()), index=1,
+            label_visibility="collapsed",
+        )
+        if METHOD_MAP[method_label] == "xgb":
+            st.caption("XGBoost does not provide per-prediction uncertainty estimates.")
+        run_column = st.button("Predict New Borehole Here", use_container_width=True)
+    method = METHOD_MAP[method_label]
 
     # Virtual borehole list — shown only when at least one exists
     if st.session_state.virtual_boreholes:
@@ -1364,7 +1464,7 @@ with st.sidebar:
         f"**Layers**: {', '.join(sorted(df['soil_layer'].unique()))}"
     )
 
-    # Mini plan view — always visible regardless of active tab (Feature 3)
+    # Mini plan view — always visible regardless of active tab
     st.plotly_chart(
         build_mini_planview(
             st.session_state._query_easting,
@@ -1383,12 +1483,23 @@ with st.sidebar:
 # ── Button actions ────────────────────────────────────────────────────────────
 if run:
     with st.spinner("Running prediction..."):
-        st.session_state.result = predictor.predict(
-            st.session_state._query_easting,
-            st.session_state._query_northing,
-            st.session_state._query_depth,
-            method,
+        # Stage 2: depth-only RF regression with confirmed soil layer
+        _depth_pred = _predict_from_layer_depth(
+            _confirmed_code, st.session_state._query_depth
         )
+        st.session_state.result = {
+            "layer":               _confirmed_code,
+            "layer_confidence":    _inferred_conf,
+            "su_kpa":              _depth_pred.get("su_kpa"),
+            "su_kpa_std":          _depth_pred.get("su_kpa_std"),
+            "spt_n":               _depth_pred.get("spt_n"),
+            "spt_n_std":           _depth_pred.get("spt_n_std"),
+            "unit_weight":         None,
+            "unit_weight_std":     None,
+            "plasticity_idx":      None,
+            "plasticity_idx_std":  None,
+            "method":              "depth_rf",
+        }
         st.session_state.pred_coords = (
             st.session_state._query_easting,
             st.session_state._query_northing,
@@ -2089,7 +2200,7 @@ with col_res:
     st.markdown("#### Prediction Results")
     if result is None:
         st.info(
-            "Set coordinates in the sidebar, choose a method, "
+            "Enter coordinates and depth in the sidebar, confirm the soil layer, "
             "then click **Run Prediction**."
         )
         st.markdown("**Soil Layer Legend**")
@@ -2134,7 +2245,8 @@ with col_res:
                    f"{pi_std:.1f}%" if pi_std is not None else None, "#8e24aa")
 
         st.caption(
-            f"Method: **{method_label}**  |  "
+            f"Layer: **{LAYER_LABELS.get(result['layer'], result['layer'])}** "
+            f"(spatial confidence: {result['layer_confidence'] * 100:.0f}%)  |  "
             f"E {st.session_state._query_easting:.1f}  "
             f"N {st.session_state._query_northing:.1f}  |  "
             f"Depth {st.session_state._query_depth:.1f} m"
