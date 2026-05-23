@@ -1431,10 +1431,12 @@ with st.sidebar:
             "Inference method",
             list(METHOD_MAP.keys()), index=1,
             label_visibility="collapsed",
+            key="vbh_method_radio",
         )
         if METHOD_MAP[method_label] == "xgb":
             st.caption("XGBoost does not provide per-prediction uncertainty estimates.")
-        run_column = st.button("Predict New Borehole Here", use_container_width=True)
+        run_column = st.button("Predict New Borehole Here", use_container_width=True,
+                               key="vbh_run_column_btn")
     method = METHOD_MAP[method_label]
 
     # Virtual borehole list — shown only when at least one exists
@@ -1566,7 +1568,8 @@ with tab1:
                          pred_layer=pred_layer, virtual_bhs=vbhs,
                          depth_limit=max_depth)
     st.plotly_chart(fig3d, use_container_width=True,
-                    config={"displayModeBar": True, "scrollZoom": True})
+                    config={"displayModeBar": True, "scrollZoom": True},
+                    key="tab1_3d_borehole_view")
 
 
 # ══ Tab 2 — 3D Solid Model ════════════════════════════════════════════════════
@@ -1580,7 +1583,8 @@ with tab2:
     with st.spinner("Building 3D solid model..."):
         solid_fig = build_solid_figure(df_view, depth_limit=max_depth)
     st.plotly_chart(solid_fig, use_container_width=True,
-                    config={"displayModeBar": True, "scrollZoom": True})
+                    config={"displayModeBar": True, "scrollZoom": True},
+                    key="tab2_3d_solid_model")
     st.caption(
         "Layer surfaces interpolated using linear triangulation. "
         "Areas outside the borehole convex hull are not extrapolated."
@@ -2110,7 +2114,8 @@ with tab5:
                 plot_bgcolor="white",
             )
             st.plotly_chart(_cls_fig, use_container_width=True,
-                            config={"displaylogo": False})
+                            config={"displaylogo": False},
+                            key="tab5_cls_fig")
 
         # ── Regression ────────────────────────────────────────────────────────
         _reg_targets = [
@@ -2162,7 +2167,8 @@ with tab5:
                     legend=dict(orientation="h", y=1.12),
                 )
                 st.plotly_chart(_reg_fig, use_container_width=True,
-                                config={"displaylogo": False})
+                                config={"displaylogo": False},
+                                key=f"tab5_reg_{_col}")
 
     _json_upload = st.file_uploader(
         "Upload your own validation_results.json (optional)",
@@ -2303,18 +2309,21 @@ if result is not None and _props is not None:
         st.plotly_chart(
             build_property_depth_chart(_props, "su_kpa", "Su (kPa)", _d, _su),
             use_container_width=True,
+            key="prop_chart_su",
         )
     with _cc2:
         st.markdown("**SPT-N vs Depth**")
         st.plotly_chart(
             build_property_depth_chart(_props, "spt_n", "SPT-N (blows/30cm)", _d, _sn),
             use_container_width=True,
+            key="prop_chart_spt",
         )
     with _cc3:
         st.markdown("**Unit Weight vs Depth**")
         st.plotly_chart(
             build_property_depth_chart(_props, "unit_weight", "Unit Weight (kN/m³)", _d, _uw),
             use_container_width=True,
+            key="prop_chart_uw",
         )
 
 
