@@ -218,6 +218,101 @@ VALUE_X_MIN, VALUE_X_MAX = 455, 520   # Suc / SPT-N
 DATA_Y_MIN = 290   # ignore header area
 
 # ---------------------------------------------------------------------------
+# Unit weight chart — graphical dot extraction
+# ---------------------------------------------------------------------------
+# The "Unit Weight (kN/m³)" column is a small dot-chart, not a text column.
+# PyMuPDF page.get_drawings() returns the individual filled-rect elements
+# that make up each plotted dot.  We cluster them by y-position to find one
+# UW reading per sample, then convert the cluster's mean x to kN/m³ using
+# the scale labels "5" and "15" printed at the chart's x-axis.
+UW_CHART_X_MIN = 428   # left edge of dot chart
+UW_CHART_X_MAX = 462   # right edge (< SPT-N column at x≈465)
+UW_SCALE_X_MIN = 425   # x-search window for scale labels
+UW_SCALE_X_MAX = 455
+UW_SCALE_Y_MIN = 265   # y-search window for scale labels (header row)
+UW_SCALE_Y_MAX = 280
+UW_DOT_MAX_DIM =  10   # px — max w/h of one drawing element forming a dot
+UW_CLUSTER_WIN =  12   # px — y-window for grouping elements into one dot
+UW_VAL_MIN     =  10.0  # kN/m³ sanity floor
+UW_VAL_MAX     =  30.0  # kN/m³ sanity ceiling
+
+
+def _calibrate_uw_scale(words: list) -> tuple:
+    """
+    Return (x_at_5, x_at_15) centre-x of the '5' and '15' kN/m³ scale
+    labels, or (None, None) if not found on this page.
+    Only page 1 carries these labels; caller should cache the result.
+    """
+    x_at_5 = x_at_15 = None
+    for w in words:
+        if UW_SCALE_X_MIN <= w[0] <= UW_SCALE_X_MAX and UW_SCALE_Y_MIN <= w[1] <= UW_SCALE_Y_MAX:
+            try:
+                v = float(w[4])
+            except ValueError:
+                continue
+            cx = (w[0] + w[2]) / 2
+            if v == 5.0:
+                x_at_5 = cx
+            elif v == 15.0:
+                x_at_15 = cx
+    return x_at_5, x_at_15
+
+
+def _extract_page_uw(
+    drawings: list,
+    x_at_5: float,
+    x_at_15: float,
+    y_surface: float,
+    px_per_m: float,
+) -> list:
+    """
+    Extract unit weight readings from graphical dot clusters on one page.
+
+    Returns list of (depth_m: float, uw_kn_m3: float).
+    """
+    if x_at_5 is None or x_at_15 is None:
+        return []
+
+    px_per_uw = (x_at_15 - x_at_5) / (15.0 - 5.0)  # px per kN/m³
+
+    # Collect centroids of small drawing elements in the UW chart x-band
+    pts: list = []
+    for d in drawings:
+        r = d["rect"]
+        cx = (r[0] + r[2]) / 2
+        cy = (r[1] + r[3]) / 2
+        w  = r[2] - r[0]
+        h  = r[3] - r[1]
+        if (UW_CHART_X_MIN <= cx <= UW_CHART_X_MAX
+                and cy >= DATA_Y_MIN
+                and w < UW_DOT_MAX_DIM
+                and h < UW_DOT_MAX_DIM):
+            pts.append((cy, cx))
+
+    if not pts:
+        return []
+
+    # Cluster by y-position (each dot = several sub-elements close in y)
+    pts.sort()
+    clusters: list = [[pts[0]]]
+    for pt in pts[1:]:
+        if pt[0] - clusters[-1][0][0] < UW_CLUSTER_WIN:
+            clusters[-1].append(pt)
+        else:
+            clusters.append([pt])
+
+    results: list = []
+    for cluster in clusters:
+        mean_cx = sum(x for _, x in cluster) / len(cluster)
+        mean_cy = sum(y for y, _ in cluster) / len(cluster)
+        depth = max(0.0, _y_to_depth(mean_cy, y_surface, px_per_m))
+        uw    = 5.0 + (mean_cx - x_at_5) / px_per_uw
+        if UW_VAL_MIN <= uw <= UW_VAL_MAX:
+            results.append((round(depth, 2), round(uw, 1)))
+
+    return results
+
+# ---------------------------------------------------------------------------
 # Per-page data extraction  (returns depth-space data, not pixel-space)
 # ---------------------------------------------------------------------------
 
@@ -290,9 +385,10 @@ def _extract_page_data(
 # ---------------------------------------------------------------------------
 
 def _build_layer_rows(
-    all_boundaries: list[tuple[float, str]],
-    all_samples: list[tuple[float, str, float | None]],
+    all_boundaries: list,
+    all_samples: list,
     total_depth: float | None,
+    all_uw_readings: list | None = None,
 ) -> list[dict]:
     """
     One row per consecutive boundary interval.
@@ -315,6 +411,8 @@ def _build_layer_rows(
         # Infer from deepest sample or deepest boundary + generous margin
         all_depths = [d for d, _, _ in all_samples] + [d for d, _ in unique]
         total_depth = round(max(all_depths) + 1.5, 2) if all_depths else unique[-1][0] + 1.5
+
+    uw_list = all_uw_readings or []
 
     rows: list[dict] = []
     for i, (top_depth, desc) in enumerate(unique):
@@ -340,6 +438,13 @@ def _build_layer_rows(
         spt_n     = int(round(sum(spt_vals) / len(spt_vals))) if spt_vals else None
         su_method = "ST" if su_kpa is not None else None
 
+        # Unit weight — average of graphical dot readings within interval
+        uw_vals = [
+            uw for uw_depth, uw in uw_list
+            if top_depth <= uw_depth < bot_depth
+        ]
+        unit_weight = round(sum(uw_vals) / len(uw_vals), 1) if uw_vals else None
+
         consistency = derive_consistency(su_kpa, spt_n, soil_layer)
 
         rows.append({
@@ -351,8 +456,9 @@ def _build_layer_rows(
             "consistency":  consistency or "",
             "su_kpa":       round(su_kpa, 1) if su_kpa  is not None else "",
             "su_method":    su_method or "",
-            "spt_n":        spt_n      if spt_n   is not None else "",
-            "unit_weight":    "", "plasticity_idx": "",
+            "spt_n":        spt_n        if spt_n        is not None else "",
+            "unit_weight":  unit_weight  if unit_weight  is not None else "",
+            "plasticity_idx": "",
             "liquid_limit":   "", "plastic_limit": "",
             "water_content":  "", "notes": "",
         })
@@ -382,14 +488,21 @@ def extract_pdf(pdf_path: str) -> list[dict]:
     doc    = fitz.open(pdf_path)
 
     header: dict = {}
-    all_boundaries: list[tuple[float, str]]              = []
-    all_samples:    list[tuple[float, str, float | None]] = []
+    all_boundaries:  list = []
+    all_samples:     list = []
+    all_uw_readings: list = []
+
+    # UW scale is only on page 1; cache it for subsequent pages
+    uw_x_at_5: float | None  = None
+    uw_x_at_15: float | None = None
 
     for page_no, page in enumerate(doc):
-        words = page.get_text("words")   # (x0,y0,x1,y1,word,block,line,word_no)
+        words    = page.get_text("words")   # (x0,y0,x1,y1,word,block,line,word_no)
+        drawings = page.get_drawings()
 
         if page_no == 0:
             header = _extract_header(words)
+            uw_x_at_5, uw_x_at_15 = _calibrate_uw_scale(words)
 
         y_surface, px_per_m = _calibrate_depth_scale(words)
         if y_surface is None:
@@ -400,9 +513,14 @@ def extract_pdf(pdf_path: str) -> list[dict]:
         all_boundaries.extend(bounds)
         all_samples.extend(samples)
 
+        uw_page = _extract_page_uw(drawings, uw_x_at_5, uw_x_at_15, y_surface, px_per_m)
+        all_uw_readings.extend(uw_page)
+
     doc.close()
 
-    rows = _build_layer_rows(all_boundaries, all_samples, header.get("total_depth"))
+    rows = _build_layer_rows(
+        all_boundaries, all_samples, header.get("total_depth"), all_uw_readings
+    )
 
     # Stamp header fields
     stem_id  = os.path.splitext(source)[0].replace("_", "-")
@@ -456,8 +574,8 @@ def _append_rows(rows: list[dict], csv_path: str) -> None:
 # ---------------------------------------------------------------------------
 
 def _print_rows(rows: list[dict]) -> None:
-    print(f"\n  {'top_m':>6} {'bot_m':>6} {'mid_m':>6}  {'layer':5}  {'su_kpa':>6}  {'spt_n':>5}  {'desc'}")
-    print(f"  {'-'*6} {'-'*6} {'-'*6}  {'-'*5}  {'-'*6}  {'-'*5}  {'-'*40}")
+    print(f"\n  {'top_m':>6} {'bot_m':>6} {'mid_m':>6}  {'layer':5}  {'su_kpa':>6}  {'spt_n':>5}  {'uw':>6}  {'desc'}")
+    print(f"  {'-'*6} {'-'*6} {'-'*6}  {'-'*5}  {'-'*6}  {'-'*5}  {'-'*6}  {'-'*40}")
     prev_bot = None
     for r in rows:
         top = r["depth_top_m"]
@@ -466,10 +584,11 @@ def _print_rows(rows: list[dict]) -> None:
         gap = ""
         if prev_bot is not None and abs(float(top) - float(prev_bot)) > 0.01:
             gap = f"  *** GAP {prev_bot}→{top} ***"
-        su    = f"{r['su_kpa']:>6}" if r["su_kpa"] != "" else "      "
-        spt   = f"{r['spt_n']:>5}" if r["spt_n"]  != "" else "     "
+        su    = f"{r['su_kpa']:>6}" if r["su_kpa"]      != "" else "      "
+        spt   = f"{r['spt_n']:>5}" if r["spt_n"]        != "" else "     "
+        uw    = f"{r['unit_weight']:>6}" if r["unit_weight"] != "" else "      "
         desc  = str(r["soil_desc"])[:40]
-        print(f"  {float(top):6.2f} {float(bot):6.2f} {float(mid):6.2f}  {r['soil_layer']:5}  {su}  {spt}  {desc}{gap}")
+        print(f"  {float(top):6.2f} {float(bot):6.2f} {float(mid):6.2f}  {r['soil_layer']:5}  {su}  {spt}  {uw}  {desc}{gap}")
         prev_bot = bot
     if rows:
         gaps = sum(

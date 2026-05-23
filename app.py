@@ -204,10 +204,10 @@ def _get_predictor():
 
 @st.cache_resource(show_spinner=False)
 def _get_depth_models() -> dict:
-    """Load Stage-2 depth-only RF regressors (su_kpa, spt_n)."""
+    """Load Stage-2 depth-only RF regressors (su_kpa, spt_n, unit_weight)."""
     import joblib as _jl
     out = {}
-    for col in ("su_kpa", "spt_n"):
+    for col in ("su_kpa", "spt_n", "unit_weight"):
         p = os.path.join(MODEL_DIR, f"stage2_depth_rf_{col}.joblib")
         if os.path.exists(p):
             out[col] = _jl.load(p)
@@ -1496,8 +1496,8 @@ if run:
             "su_kpa_std":          _depth_pred.get("su_kpa_std"),
             "spt_n":               _depth_pred.get("spt_n"),
             "spt_n_std":           _depth_pred.get("spt_n_std"),
-            "unit_weight":         None,
-            "unit_weight_std":     None,
+            "unit_weight":         _depth_pred.get("unit_weight"),
+            "unit_weight_std":     _depth_pred.get("unit_weight_std"),
             "plasticity_idx":      None,
             "plasticity_idx_std":  None,
             "method":              "depth_rf",
