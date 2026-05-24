@@ -1378,6 +1378,11 @@ with st.sidebar:
             "depth, derived from statistical patterns in the borehole dataset. "
             "Users may override the inferred stratum with site-specific knowledge."
         )
+        st.caption(
+            "Statistical framework based on: Nguyen et al. (2023). Statistical Characterisation "
+            "of the Geotechnical Properties of Bangkok Subsoil. Geotechnical and Geological "
+            "Engineering, 41, 2043–2063. https://doi.org/10.1007/s10706-023-02390-z"
+        )
 
     st.divider()
 
@@ -1951,6 +1956,11 @@ with tab4:
         ("Soil profile 1.png", "Soil Profile 1"),
         ("Soil profile 2.png", "Soil Profile 2"),
     ])
+    st.caption(
+        "Charts adapted from the statistical framework of Nguyen et al. (2023). Statistical "
+        "Characterisation of the Geotechnical Properties of Bangkok Subsoil. Geotechnical and "
+        "Geological Engineering, 41, 2043–2063. https://doi.org/10.1007/s10706-023-02390-z"
+    )
 
 
 with tab5:
