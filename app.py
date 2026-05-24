@@ -1296,7 +1296,7 @@ for _k, _v in _SS_DEFAULTS.items():
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown(
-        "<h2 style='margin-bottom:0;'>3D Soil Profile Viewer</h2>"
+        "<h2 style='margin-bottom:0;'>Prediction Panel</h2>"
         "<p style='color:#888;font-size:.85rem;margin-top:2px;'>"
         "Bangkok Subsoil - MRT Orange Line</p>",
         unsafe_allow_html=True,
